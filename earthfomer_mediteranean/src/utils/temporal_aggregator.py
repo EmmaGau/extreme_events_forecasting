@@ -31,8 +31,6 @@ class AreaDataset:
 
     
 class TemporalAggregator:
-    # Also the target need to be coarsen after scaling we need to prepare that
-
     def __init__(self, dataset: AreaDataset, stack_number_input : int,lead_time_number : int, resolution_input : int, resolution_output: int, scaler: DataScaler, scaling_years: List[int], scaling_months: List[int]):
         self.name = "TemporalAggregator"
         # dataset parameters 
@@ -103,7 +101,6 @@ class TemporalAggregator:
         related_stats = {key: value.sel(**{f"{self.scaling_resolution.value}": self.stat_idx}) for key, value in self.statistics.items()}
         return self.scaler.scale(data, related_stats)
 
-    
     def aggregate(self, idx: int):
         input_data = []
         target_data = []
@@ -176,6 +173,5 @@ class TemporalAggregatorFactory:
             scaler=self.scaler
         )
 
-
 if __name__ == "__main__":
-    factory = TemporalAggregatorFactory(stack_number_input=3, lead_time_number=1, resolution_input=5, resolution_output=5, scaler=DataScaler(mode = "standard"))
+    pass

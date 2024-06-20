@@ -1,7 +1,5 @@
 from typing import List, Tuple
 from torch.utils.data import Dataset, DataLoader
-from utils import enums
-from enum import Enum
 import xarray as xr
 import numpy as np 
 import torch 
@@ -49,7 +47,6 @@ class DatasetEra(Dataset):
         self.last_year = self.med_data.time.dt.year.max().item()
         self.compute_len_dataset()
         
-        
     def _initialize_config(self, wandb_config):
         """Initialize configuration settings."""
         ds_conf = wandb_config["dataset"]
@@ -60,10 +57,6 @@ class DatasetEra(Dataset):
         self.land_sea_mask = ds_conf["land_sea_mask"]
         self.relevant_months = ds_conf["relevant_months"]
         self.relevant_years = ds_conf["relevant_years"]
-    
-    def change_spatial_resolution(self, data, spatial_resolution):
-        regridded_data = data.coarsen(latitude=spatial_resolution, longitude=spatial_resolution, boundary="trim").mean()
-        return regridded_data
 
     def _load_and_prepare_data(self):
         """Load data from directories for all variables and create big dataset that contains all variables for both regions
@@ -98,6 +91,7 @@ class DatasetEra(Dataset):
         ds = self._filter_data_by_time(ds)
         return ds
     
+    
     def remap_MED_to_NH(self, nh_data, med_data):
         """Remap Mediterranean data to North Hemisphere grid and pad with zeros."""
         # Empty array same dimensions and coordinates as nh_data
@@ -117,6 +111,10 @@ class DatasetEra(Dataset):
             other = med_data
         )
         return remapped_data
+    
+    def change_spatial_resolution(self, data, spatial_resolution):
+        regridded_data = data.coarsen(latitude=spatial_resolution, longitude=spatial_resolution, boundary="trim").mean()
+        return regridded_data
 
     def _filter_data_by_time(self, data):
         """Filter the data to include only the relevant months and years."""
@@ -139,17 +137,26 @@ class DatasetEra(Dataset):
         target_data.where(self.land_sea_mask == 0).mean(dim=['latitude', 'longitude'])
         return target_data
     
+    def _prepare_target(self, target_data):
+
+        pass
+        
+
 
     def __getitem__(self, idx):
+        input_data = []
         # Aggregate the input data
-        med_input_data, med_target_data, _,_ = self.med_aggregator.aggregate(idx)
+        med_input_aggregated, med_target_aggregated, _,_ = self.med_aggregator.aggregate(idx)
         if self.nh_data is not None:
-            nh_input_data, nh_target_data, _, _ = self.nh_aggregator.aggregate(idx)
+            nh_input_aggregated, nh_target_aggregated, _, _ = self.nh_aggregator.aggregate(idx)
+        
        
-        input_data = med_input_data
-        target_data = med_target_data
+        for var in self.variables_med:
+            print(med_input_aggregated[var].values.shape)
+            input_data.append(med_input_aggregated[var].values)
 
-        return input_data, target_data
+
+        return input_data
 
 
     
