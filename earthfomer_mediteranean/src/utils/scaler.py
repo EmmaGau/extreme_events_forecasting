@@ -2,8 +2,8 @@
 import numpy as np
 
 class DataScaler:
-    def __init__(self, mode) -> None:
-        self.mode = mode
+    def __init__(self, config) -> None:
+        self.mode = config['mode']
     
     def normalize(self,data, min, max):
         return (data - min) / (max - min)

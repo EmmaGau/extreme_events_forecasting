@@ -1,40 +1,39 @@
 from typing import List, Dict
 import xarray as xr
 import os 
-from enums import Resolution
-
+from utils.enums import Resolution
+from utils.tools import AreaDataset 
 
 class DataStatistics:
-    def __init__(self, years : List[int] , months: List[int], spatial_resolution: int=1):
-        """ Saves the data and the statistics for the given years and months.
-        Compute the statistics with different level of resolution (week, day, month, season, year) over all the years and months given.
-        If the statistics are already computed, it loads them, otherwise it computes them and saves them.
-
-        Args:
-            data (xr.DataArray): _description_
-            years (List[int]): _description_
-            months (List[int]): _description_
-            resolution (Resolution): _description_
-        """
+    def __init__(self, years : List[int], months : List[int],resolution: Resolution):
+        self.resolution = resolution
         self.years = years
         self.months = months
-        self.spatial_resolution = spatial_resolution
+    
+    def _get_years_months_str(self):
+        return f"{'-'.join(map(str, self.years))}_{'-'.join(map(str, self.months))}"
 
-    def _get_stats(self, data: xr.DataArray, area : str,resolution: Resolution ) -> Dict[str, float]:
-        path_mean, path_std  = f"data/{self.resolution.value}_{self.years}_{self.months}_average.nc", f"data/{self.resolution.value}_{self.years}_{self.months}_std.nc"
-        path_min, path_max = f"data/{self.resolution.value}_{self.years}_{self.months}_min.nc", f"data/{self.resolution.value}_{self.years}_{self.months}_max.nc"
-        
+    def _get_stats(self, data_class : AreaDataset) -> Dict[str, float]:
+        area = data_class.area
+        spatial_resolution = data_class.spatial_resolution
+
+        path_mean = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_average.nc"
+        path_std = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_std.nc"
+        path_min = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_min.nc"
+        path_max = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_max.nc"
+
         if os.path.exists(path_mean) and os.path.exists(path_std) and os.path.exists(path_min) and os.path.exists(path_max):
             average = xr.open_dataarray(path_mean)
             std = xr.open_dataarray(path_std)
             min = xr.open_dataarray(path_min)
             max = xr.open_dataarray(path_max)
         else:
-            average, std, min, max = self._compute_stats(data)
-            self.save_stats(average, std, min, max)
+            average, std, min, max = self._compute_stats(data_class)
+            self.save_stats(data_class, average, std, min, max)
         return {"mean" : average, "std" : std, "min": min, "max": max}
     
-    def _compute_stats(self, data: xr.DataArray):
+    def _compute_stats(self, data_class : AreaDataset):
+        data = data_class.data
         # check we have the right year and months 
         data= data.sel(time = data.time.dt.year.isin(self.years))
         data = data.sel(time = data.time.dt.month.isin(self.months))
@@ -45,19 +44,33 @@ class DataStatistics:
         max = data.groupby(f"time.{self.resolution.value}").max(dim = "time")
         return average, std, min, max
     
-    def save_stats(self, average, std, min,max):
-        average.to_netcdf(f"data/{self.resolution.value}_{self.years}_{self.months}_average.nc")
-        std.to_netcdf(f"data/{self.resolution.value}_{self.years}_{self.months}_std.nc")
-        min.to_netcdf(f"data/{self.resolution.value}_{self.years}_{self.months}_min.nc")
-        max.to_netcdf(f"data/{self.resolution.value}_{self.years}_{self.months}_max.nc")
-    
+    def save_stats(self,data_class, average, std, min,max):
+        area = data_class.area
+        spatial_resolution = data_class.spatial_resolution
 
-
-
-
-        
-
+        path_mean = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_average.nc"
+        path_std = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_std.nc"
+        path_min = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_min.nc"
+        path_max = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_max.nc"
 
         
-        
-        
+        average.to_netcdf(path_mean)
+        std.to_netcdf(path_std)
+        min.to_netcdf(path_min)
+        max.to_netcdf(path_max)
+
+
+if __name__ == "__main__":
+    years = [2005,2011]
+    months = [6,7,8]
+    area = "mediteranean"
+    vars = ['tp']
+    target = 'tp'
+    spatial_resolution = 1
+
+    data_path = "/scistor/ivm/data_catalogue/reanalysis/ERA5_0.25/PR/PR_era5_MED_1degr_19400101_20240229.nc"
+    data = xr.open_dataset(data_path)
+
+    data_class = AreaDataset(area, data, spatial_resolution, years, months, vars, target)
+    stats = DataStatistics(Resolution.MONTHLY, years, months)
+    print(stats._get_stats(data_class))

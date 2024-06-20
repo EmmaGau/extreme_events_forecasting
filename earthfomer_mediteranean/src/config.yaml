@@ -2,16 +2,18 @@ dataset:
   variables_nh: []
   variables_med: ['tp']
   target_variable: 'tp'
-  relevant_years: [1981, 2010]
+  relevant_years: [1950, 1980]
   relevant_months: [1, 12]
-
-
-
-
-temporal_aggregator:
-
-
-
+  land_sea_mask: "/scistor/ivm/shn051/extreme_events_forecasting/primary_code/data/ERA5_land_sea_mask_1deg.nc"
+  spatial_resolution: 1
 
 scaler:
   mode: 'standardize'
+
+temporal_aggregator:
+  stack_number_input: 3
+  lead_time_number: 3
+  resolution_input: 7
+  resolution_output: 7
+
+

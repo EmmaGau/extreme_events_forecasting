@@ -1,6 +1,9 @@
 # extreme_events_forecasting
 End-of-studies internship project
 
+
+
+```
 📦src
  ┣ 📂data
  ┃ ┣ 📜mediteranean_dataset.py
@@ -8,3 +11,4 @@ End-of-studies internship project
  ┣ 📂evaluation
  ┣ 📂model
  ┗ 📂utils
+ ```

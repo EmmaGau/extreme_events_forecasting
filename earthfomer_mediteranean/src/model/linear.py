@@ -45,3 +45,30 @@ class LinearEra(pl.LightningModule):
     
     def configure_optimizers(self):
         return Adam(self.parameters(), lr=1e-3)
+
+if __name__ == "__main__":
+        import torch
+        from torch.utils.data import DataLoader, TensorDataset
+        import pytorch_lightning as pl
+
+        # Generate some random example data
+        batch_size = 32
+        input_dim = 10
+        hidden_dim = 5
+
+        # Example inputs and targets
+        x = torch.randn((batch_size, input_dim))  # Random input data
+        y = torch.randn((batch_size))             # Random target data
+
+        # Create a DataLoader for training
+        dataset = TensorDataset(x, y)
+        train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+        # Initialize the model
+        model = LinearEra(input_dim=input_dim, hidden_dim=hidden_dim)
+
+        # Initialize PyTorch Lightning Trainer
+        trainer = pl.Trainer(max_epochs=5)
+
+        # Train the model
+        trainer.fit(model, train_dataloaders=train_loader)

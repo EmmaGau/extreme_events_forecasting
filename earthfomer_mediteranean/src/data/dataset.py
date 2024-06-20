@@ -1,52 +1,54 @@
 from typing import List, Tuple
-from torch.utils.data import Dataset
-from extreme_events_forecasting.earthfomer_mediteranean.src.utils import enums
+from torch.utils.data import Dataset, DataLoader
+from utils import enums
 from enum import Enum
 import xarray as xr
 import numpy as np 
 import torch 
-from utils.temporal_aggregator import TemporalAggregator
-import xesmf as xe
-from utils.statistics import DataStatistics
+from utils.temporal_aggregator import TemporalAggregatorFactory
 from utils.scaler import DataScaler
-from utils.enums import Resolution
-
-# C'est quoi ces histoires de lost weights, clima as season group by data
-
-# the dataset takes a data_dir mediteranean and data dir North Hemisphere
-# oppens the data dir and reads the data with xarray, only take the 
-# variables specified in the variables list
-# then it remaps the data from mediteranean to North Hemisphere
-# then it takes only the relevant months and years specified in the config
-# uses the temporal aggregator to aggregate the input data 
-# prepare the target data relative to the lead time + output resolution needed 
-# then it scales the data using the scaler specified in the config
-# then it returns the data both NH and MED
-
-
-#(TODO) Climate as season, year float, month float
+import wandb
+from utils.tools import AreaDataset
 
 class DatasetEra(Dataset):
     def __init__(
         self,
         wandb_config : dict,
         data_dirs : str,
-        temporal_aggregator : TemporalAggregator,
-        scaler : DataScaler = None,
+        temporal_aggr_factory : TemporalAggregatorFactory,
     ):
+        """The dataset takes a data_dir mediteranean and data dir North Hemisphere
+            oppens the data dir and reads the data with xarray, only take the 
+            variables specified in the variables list
+            then it remaps the data from mediteranean to North Hemisphere
+            then it takes only the relevant months and years specified in the config
+            uses the temporal aggregator to aggregate the input data 
+            prepare the target data relative to the lead time + output resolution needed 
+            then it scales the data using the scaler specified in the config
+            then it returns the data both NH and MED
+
+        Args:
+            wandb_config (dict): _description_
+            data_dirs (str): _description_
+            temporal_aggregator (TemporalAggregator): _description_
+            scaler (DataScaler, optional): _description_. Defaults to None.
+        """
         self._initialize_config(wandb_config)
-        self.stats_computer = DataStatistics(self.relevant_years, self.relevant_months,self.spatial_resolution)
         self.data_dirs = data_dirs
-        self.scaler = scaler
+        self.aggregator_factory = temporal_aggr_factory
+
         self.med_data, self.nh_data = self._load_and_prepare_data()
-        self.temporal_aggregator_med, self.temporal_aggregator_nh = temporal_aggregator
+        self.med_class = AreaDataset("mediteranean", self.med_data, self.spatial_resolution, self.relevant_years, self.relevant_months, self.variables_med, self.target)
+        self.med_aggregator = self.aggregator_factory.create_aggregator(self.med_class)
+        
+        if self.nh_data is not None:
+            self.nh_class = AreaDataset("north_hemisphere", self.nh_data, self.spatial_resolution, self.relevant_years, self.relevant_months, self.variables_nh, self.target)
+            self.nh_aggregator = self.aggregator_factory.create_aggregator(self.nh_class)
 
         self.first_year = self.med_data.time.dt.year.min().item()
         self.last_year = self.med_data.time.dt.year.max().item()
+        self.compute_len_dataset()
         
-    def _get_stats(self, data: xr.DataArray, resolution: Resolution):
-        stats = self.stats_computer._get_stats(data, resolution)
-        return stats
         
     def _initialize_config(self, wandb_config):
         """Initialize configuration settings."""
@@ -66,18 +68,17 @@ class DatasetEra(Dataset):
     def _load_and_prepare_data(self):
         """Load data from directories for all variables and create big dataset that contains all variables for both regions
             and keep the relevant years/months."""
-        med_data = xr.Dataset()
-        nh_data = xr.Dataset()
+        med_data = xr.Dataset() if len(self.variables_med) !=0 else None
+        nh_data = xr.Dataset() if len(self.variables_nh) !=0 else None
         
         # Load Mediterranean data
         for var in self.variables_med:
             data = self._load_data(self.data_dirs['mediteranean'][var])
-            med_data[var] = data
-
+            med_data[var] = data[var]
         # Load North Hemisphere data
         for var in self.variables_nh:
             data = self._load_data(self.data_dirs['north_hemisphere'][var])
-            nh_data[var] = data
+            nh_data[var] = data[var]
         
         # change resolution if necessary
         if self.spatial_resolution !=1:
@@ -93,7 +94,7 @@ class DatasetEra(Dataset):
     
     def _load_data(self, dir_path):
         """Load data from a specified directory using xarray."""
-        ds = xr.open_mfdataset(f"{dir_path}/*.nc", combine='by_coords')
+        ds = xr.open_dataset(dir_path)
         ds = self._filter_data_by_time(ds)
         return ds
     
@@ -115,7 +116,6 @@ class DatasetEra(Dataset):
             (remapped_data.latitude >= med_lat_min) & (remapped_data.latitude <= med_lat_max),
             other = med_data
         )
-
         return remapped_data
 
     def _filter_data_by_time(self, data):
@@ -124,42 +124,74 @@ class DatasetEra(Dataset):
         data = data.sel(time=data['time.month'].isin(self.relevant_months))
         return data
     
+    def compute_len_dataset(self):
+        len_med = self.med_aggregator.compute_len_dataset()
+        if self.nh_data is not None:
+            len_nh = self.nh_aggregator.compute_len_dataset()
+            assert len_med == len_nh, "The length of the two datasets should be the same."
+        self.len_dataset = len_med
     
     def __len__(self):
-        len_med, len_nh = self.temporal_aggregator_med.compute_len_dataset(), self.temporal_aggregator_nh.compute_len_dataset()
-        assert len_med == len_nh, "The length of the two datasets should be the same."
-        return len_med
+        return self.len_dataset
+    
+    def _transform_target(self, target_data):
+        target_data.where(self.land_sea_mask == 1).mean(dim=['latitude', 'longitude'])
+        target_data.where(self.land_sea_mask == 0).mean(dim=['latitude', 'longitude'])
+        return target_data
     
 
     def __getitem__(self, idx):
         # Aggregate the input data
-        med_input_data, med_target_data, season_float, year_float = self.temporal_aggregator.aggregate(self.med_data, idx)
-        nh_input_data, nh_target_data, _, _ = self.temporal_aggregator.aggregate(self.nh_data, idx)
+        med_input_data, med_target_data, _,_ = self.med_aggregator.aggregate(idx)
+        if self.nh_data is not None:
+            nh_input_data, nh_target_data, _, _ = self.nh_aggregator.aggregate(idx)
+       
+        input_data = med_input_data
+        target_data = med_target_data
 
-
-        # Concatenate Mediterranean and North Hemisphere data along the variable dimension
-        input_data = torch.cat([med_input_data, nh_input_data], dim=0)
-        target_data = torch.cat([med_target_data], dim=0)
-
-        return input_data, target_data, season_float, year_float
+        return input_data, target_data
 
 
     
-
-
 if __name__ == "__main__":
-    # Générer des données d'exemple
-    data = [
-        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
-        (13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24),
-        (25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36),
-    ]
+    data_dirs = {'mediteranean': {'tp':"/scistor/ivm/data_catalogue/reanalysis/ERA5_0.25/PR/PR_era5_MED_1degr_19400101_20240229.nc"},
+                 'north_hemisphere': {}}
 
-    # Créer un Dataset
-    dataset = DatasetEra(variables=[enums.T2M, enums.Precipitation, enums.SoilMoisture], data=data)
+    wandb_config = {
+    'dataset': {
+        'variables_nh': [],
+        'variables_med': ['tp'],
+        'target_variable': 'tp',
+        'relevant_years': [1950, 1980],
+        'relevant_months': [10,11,12,1,2,3],
+        'land_sea_mask': '/scistor/ivm/shn051/extreme_events_forecasting/primary_code/data/ERA5_land_sea_mask_1deg.nc',
+        'spatial_resolution': 1
+    },
+    'scaler': {
+        'mode': 'standardize'
+    },
+    'temporal_aggregator': {
+        'stack_number_input': 3,
+        'lead_time_number': 3,
+        'resolution_input': 7,
+        'resolution_output': 7,
+        'scaling_years': [1950, 1980],
+        'scaling_months': [10,11,12,1,2,3], 
+    }
+}
 
-    # Afficher la taille du Dataset
-    print(len(dataset))
+    # Initialize wandb
+    wandb.init(project='linear_era', config=wandb_config)
 
-    # Afficher un élément du Dataset
-    print(dataset[0])
+    # Initialize dataset and dataloaders
+    scaler = DataScaler(wandb_config['scaler'])
+    temp_aggregator_factory = TemporalAggregatorFactory(wandb_config['temporal_aggregator'], scaler)
+    
+
+    train_dataset = DatasetEra(wandb_config, data_dirs, temp_aggregator_factory)
+    print(train_dataset.__len__())
+
+    dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
+
+    sample = next(iter(dataloader))
+    print(sample)
