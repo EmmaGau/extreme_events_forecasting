@@ -42,10 +42,13 @@ class DatasetEra(Dataset):
         if self.nh_data is not None:
             self.nh_class = AreaDataset("north_hemisphere", self.nh_data, self.spatial_resolution, self.relevant_years, self.relevant_months, self.variables_nh, self.target)
             self.nh_aggregator = self.aggregator_factory.create_aggregator(self.nh_class)
+        else :
+            self.nh_aggregator = None
 
         self.first_year = self.med_data.time.dt.year.min().item()
         self.last_year = self.med_data.time.dt.year.max().item()
-        self.compute_len_dataset()
+
+        self.land_sea_mask = xr.open_dataset(self.mask_path)
         
     def _initialize_config(self, wandb_config):
         """Initialize configuration settings."""
@@ -54,7 +57,7 @@ class DatasetEra(Dataset):
         self.target = ds_conf["target_variable"]
         self.variables_nh = ds_conf["variables_nh"]
         self.variables_med = ds_conf["variables_med"]
-        self.land_sea_mask = ds_conf["land_sea_mask"]
+        self.mask_path = ds_conf["land_sea_mask"]
         self.relevant_months = ds_conf["relevant_months"]
         self.relevant_years = ds_conf["relevant_years"]
 
@@ -91,7 +94,6 @@ class DatasetEra(Dataset):
         ds = self._filter_data_by_time(ds)
         return ds
     
-    
     def remap_MED_to_NH(self, nh_data, med_data):
         """Remap Mediterranean data to North Hemisphere grid and pad with zeros."""
         # Empty array same dimensions and coordinates as nh_data
@@ -122,41 +124,52 @@ class DatasetEra(Dataset):
         data = data.sel(time=data['time.month'].isin(self.relevant_months))
         return data
     
-    def compute_len_dataset(self):
+    def __len__(self):
         len_med = self.med_aggregator.compute_len_dataset()
         if self.nh_data is not None:
             len_nh = self.nh_aggregator.compute_len_dataset()
             assert len_med == len_nh, "The length of the two datasets should be the same."
-        self.len_dataset = len_med
-    
-    def __len__(self):
-        return self.len_dataset
+        return len_med
     
     def _transform_target(self, target_data):
-        target_data.where(self.land_sea_mask == 1).mean(dim=['latitude', 'longitude'])
-        target_data.where(self.land_sea_mask == 0).mean(dim=['latitude', 'longitude'])
+        for time in target_data.time:
+            print(self.land_sea_mask==0)
+            print(target_data[time].where(self.land_sea_mask == 0).mean(dim=['latitude', 'longitude']))
+            target_data[time] = target_data[time].where(self.land_sea_mask == 0).mean(dim=['latitude', 'longitude'])
+            target_data[time] = target_data[time].where(self.land_sea_mask == 1).mean(dim=['latitude', 'longitude'])
         return target_data
     
     def _prepare_target(self, target_data):
-
-        pass
+        target_data = target_data[self.target]
+        print("target_data", target_data)
+        target_data = [self._transform_target(target_data)]
+        print("target_data", target_data)
+        target_array = np.transpose(np.array(target_data.values), (1,2,3,0))
+        target_tensor = torch.tensor(target_array)
+        return target_tensor
         
-
-
     def __getitem__(self, idx):
-        input_data = []
+        input_list = []
         # Aggregate the input data
-        med_input_aggregated, med_target_aggregated, _,_ = self.med_aggregator.aggregate(idx)
+        med_input_aggregated, med_target_aggregated, season_float, year_float = self.med_aggregator.aggregate(idx)
+
+       # input data preparation
+        for var in self.variables_med:
+            input_list.append(med_input_aggregated[var].values)
+
         if self.nh_data is not None:
             nh_input_aggregated, nh_target_aggregated, _, _ = self.nh_aggregator.aggregate(idx)
+            for var in self.variables_nh:
+                input_list.append(nh_input_aggregated[var].values)
+            
+        input_data_np = np.transpose(np.array(input_list), (1,2,3,0))
+        input_tensor = torch.tensor(input_data_np)  # size (batch_size, height, width, channels)
+
+        # target preparation
+        target_tensor = self._prepare_target(med_target_aggregated) # size (batch_size, height, width, channels)
+        print("target_tensor", target_tensor.shape)
         
-       
-        for var in self.variables_med:
-            print(med_input_aggregated[var].values.shape)
-            input_data.append(med_input_aggregated[var].values)
-
-
-        return input_data
+        return input_tensor, target_tensor
 
 
     
@@ -169,7 +182,7 @@ if __name__ == "__main__":
         'variables_nh': [],
         'variables_med': ['tp'],
         'target_variable': 'tp',
-        'relevant_years': [1950, 1980],
+        'relevant_years': [1950,1980],
         'relevant_months': [10,11,12,1,2,3],
         'land_sea_mask': '/scistor/ivm/shn051/extreme_events_forecasting/primary_code/data/ERA5_land_sea_mask_1deg.nc',
         'spatial_resolution': 1
@@ -182,7 +195,7 @@ if __name__ == "__main__":
         'lead_time_number': 3,
         'resolution_input': 7,
         'resolution_output': 7,
-        'scaling_years': [1950, 1980],
+        'scaling_years': [1950,1980],
         'scaling_months': [10,11,12,1,2,3], 
     }
 }
@@ -196,9 +209,8 @@ if __name__ == "__main__":
     
 
     train_dataset = DatasetEra(wandb_config, data_dirs, temp_aggregator_factory)
-    print(train_dataset.__len__())
+    print("len dataset", train_dataset.__len__())
 
     dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
 
     sample = next(iter(dataloader))
-    print(sample)

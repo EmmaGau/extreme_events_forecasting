@@ -81,9 +81,9 @@ class TemporalAggregator:
     
     def compute_len_dataset(self):
         length = 0
-        for _, wet_season_data in self.wet_season_data:
-            print('compute number',self._compute_number_samples_in_season(wet_season_data))
-            length += self._compute_number_samples_in_season(wet_season_data)
+        print('wet season len', len(self.wet_season_data))
+        for _, wet_season in self.wet_season_data:
+            length += self._compute_number_samples_in_season(wet_season)
         return length
     
     def find_resolution_idx (self,resolution: Resolution, data : xr.DataArray, idx: int):
