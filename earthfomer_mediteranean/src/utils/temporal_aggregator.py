@@ -31,7 +31,7 @@ class AreaDataset:
 
     
 class TemporalAggregator:
-    def __init__(self, dataset: AreaDataset, stack_number_input : int,lead_time_number : int, resolution_input : int, resolution_output: int, scaler: DataScaler, scaling_years: List[int], scaling_months: List[int]):
+    def __init__(self, dataset: AreaDataset, stack_number_input : int,lead_time_number : int, resolution_input : int, resolution_output: int, scaler: DataScaler, scaling_years: List[int], scaling_months: List[int], gap : int =0):
         self.name = "TemporalAggregator"
         # dataset parameters 
         self.dataset = dataset
@@ -41,6 +41,7 @@ class TemporalAggregator:
         self.lead_time_number = lead_time_number
         self.resolution_input = resolution_input
         self.resolution_output = resolution_output
+        self.gap = gap
 
         # load data and scaler
         self.scaler = scaler
@@ -145,7 +146,8 @@ class TemporalAggregator:
         target_data = xr.concat(target_data, dim = "time")
 
         # update temporal index for next iteration
-        self._current_temporal_idx = start_idx_output + self.resolution_output*self.lead_time_number +1
+        # self._current_temporal_idx = start_idx_output + self.resolution_output*self.lead_time_number +1
+        self._current_temporal_idx += self.gap
         self._temporal_idx_maping[idx] = self._current_temporal_idx
 
         return input_data, target_data, self.season_float, self.year_float

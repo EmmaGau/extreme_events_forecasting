@@ -48,7 +48,7 @@ class DatasetEra(Dataset):
         self.first_year = self.med_data.time.dt.year.min().item()
         self.last_year = self.med_data.time.dt.year.max().item()
 
-        self.land_sea_mask = xr.open_dataset(self.mask_path)
+        self.land_sea_mask = self.get_binary_sea_mask()
         
     def _initialize_config(self, wandb_config):
         """Initialize configuration settings."""
@@ -60,6 +60,7 @@ class DatasetEra(Dataset):
         self.mask_path = ds_conf["land_sea_mask"]
         self.relevant_months = ds_conf["relevant_months"]
         self.relevant_years = ds_conf["relevant_years"]
+        self.predict_sea_land= ds_conf["predict_sea_land"]
 
     def _load_and_prepare_data(self):
         """Load data from directories for all variables and create big dataset that contains all variables for both regions
@@ -94,13 +95,22 @@ class DatasetEra(Dataset):
         ds = self._filter_data_by_time(ds)
         return ds
     
+    def get_binary_sea_mask(self):
+        mask = xr.open_dataset(self.mask_path)
+        threshold = 0.3
+        mask["lsm"] = xr.apply_ufunc(
+            lambda x: (x > threshold).astype(int),
+            mask["lsm"],
+            dask="allowed",  # Si vous utilisez dask, sinon retirez cet argument
+            keep_attrs=True  # Conserver les attributs
+        )
+        return mask["lsm"]
+
     def remap_MED_to_NH(self, nh_data, med_data):
         """Remap Mediterranean data to North Hemisphere grid and pad with zeros."""
         # Empty array same dimensions and coordinates as nh_data
-        print("nh_data",nh_data)
         fill_values = {var: 0 for var in nh_data.data_vars}
         remapped_data = xr.full_like(nh_data, fill_value=fill_values)
-        print("remapped_data",remapped_data)
 
         # Find the overlap region and assign Mediterranean data to the remapped data
         med_lon_min, med_lon_max = med_data.min(dim = "longitude"), med_data.max(dim = "longitude")
@@ -131,21 +141,34 @@ class DatasetEra(Dataset):
             assert len_med == len_nh, "The length of the two datasets should be the same."
         return len_med
     
-    def _transform_target(self, target_data):
+    def _prepare_sea_land_target(self, target_data):
+        sea_means = []
+        land_means = []
+        
         for time in target_data.time:
-            print(self.land_sea_mask==0)
-            print(target_data[time].where(self.land_sea_mask == 0).mean(dim=['latitude', 'longitude']))
-            target_data[time] = target_data[time].where(self.land_sea_mask == 0).mean(dim=['latitude', 'longitude'])
-            target_data[time] = target_data[time].where(self.land_sea_mask == 1).mean(dim=['latitude', 'longitude'])
-        return target_data
+            sea_mean = target_data.sel(time=time).where(self.land_sea_mask == 0).mean(dim=['latitude', 'longitude'])
+            land_mean = target_data.sel(time=time).where(self.land_sea_mask == 1).mean(dim=['latitude', 'longitude'])
+            
+            sea_means.append(sea_mean)
+            land_means.append(land_mean)
+        
+        sea_data = xr.concat(sea_means, dim='time').rename('sea_mean')
+        land_data = xr.concat(land_means, dim='time').rename('land_mean')
+        
+        # Combine the sea and land data into a single dataset
+        target_data_combined = xr.Dataset({'sea_mean': sea_data, 'land_mean': land_data})
+        target_tensor = torch.tensor((np.transpose(np.array([[target_data_combined['sea_mean'].values, target_data_combined['land_mean'].values]]), (2,1,0))))
+        print(target_tensor.shape)
+        
+        return target_tensor
     
     def _prepare_target(self, target_data):
         target_data = target_data[self.target]
-        print("target_data", target_data)
-        target_data = [self._transform_target(target_data)]
-        print("target_data", target_data)
-        target_array = np.transpose(np.array(target_data.values), (1,2,3,0))
-        target_tensor = torch.tensor(target_array)
+        if self.predict_sea_land:
+            target_tensor = self._prepare_sea_land_target(target_data)
+        else: 
+            target_array = np.transpose(np.array([target_data.values]), (1,2,3,0))
+            target_tensor = torch.tensor(target_array)
         return target_tensor
         
     def __getitem__(self, idx):
@@ -182,10 +205,11 @@ if __name__ == "__main__":
         'variables_nh': [],
         'variables_med': ['tp'],
         'target_variable': 'tp',
-        'relevant_years': [1950,1980],
+        'relevant_years': list(range(2005,2011)),
         'relevant_months': [10,11,12,1,2,3],
         'land_sea_mask': '/scistor/ivm/shn051/extreme_events_forecasting/primary_code/data/ERA5_land_sea_mask_1deg.nc',
-        'spatial_resolution': 1
+        'spatial_resolution': 1,
+        'predict_sea_land': True,
     },
     'scaler': {
         'mode': 'standardize'
@@ -195,8 +219,9 @@ if __name__ == "__main__":
         'lead_time_number': 3,
         'resolution_input': 7,
         'resolution_output': 7,
-        'scaling_years': [1950,1980],
+        'scaling_years': list(range(2005,2011)),
         'scaling_months': [10,11,12,1,2,3], 
+        'gap': 1,
     }
 }
 
