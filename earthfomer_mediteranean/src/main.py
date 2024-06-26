@@ -2,7 +2,7 @@ import wandb
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from data.dataset import DatasetEra  # Assurez-vous que le nom du fichier contenant DatasetEra est correct
-from model.linear import LinearEra  # Assurez-vous que le nom du fichier contenant LinearEra est correct
+from extreme_events_forecasting.primary_code.linear import LinearEra  # Assurez-vous que le nom du fichier contenant LinearEra est correct
 from utils.temporal_aggregator import TemporalAggregator, TemporalAggregatorFactory
 from utils.statistics import DataStatistics
 from utils.scaler import DataScaler

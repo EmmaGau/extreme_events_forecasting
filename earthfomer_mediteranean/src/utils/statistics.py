@@ -5,22 +5,26 @@ from utils.enums import Resolution
 from utils.tools import AreaDataset 
 
 class DataStatistics:
-    def __init__(self, years : List[int], months : List[int],resolution: Resolution):
+    def __init__(self, years : List[int], months : List[int], resolution: Resolution):
         self.resolution = resolution
         self.years = years
         self.months = months
     
     def _get_years_months_str(self):
         return f"{'-'.join(map(str, self.years))}_{'-'.join(map(str, self.months))}"
+    
+    def get_vars_stats_str(self, data_class : AreaDataset):
+        vars = data_class.vars
+        return "_".join(vars)
 
     def _get_stats(self, data_class : AreaDataset) -> Dict[str, float]:
         area = data_class.area
         spatial_resolution = data_class.spatial_resolution
 
-        path_mean = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_average.nc"
-        path_std = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_std.nc"
-        path_min = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_min.nc"
-        path_max = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_max.nc"
+        path_mean = f"../data/{self.resolution.value}_{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_average.nc"
+        path_std = f"../data/{self.resolution.value}_{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_std.nc"
+        path_min = f"../data/{self.resolution.value}_{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_min.nc"
+        path_max = f"../data/{self.resolution.value}_{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_max.nc"
 
         if os.path.exists(path_mean) and os.path.exists(path_std) and os.path.exists(path_min) and os.path.exists(path_max):
             average = xr.open_dataarray(path_mean)
@@ -48,11 +52,10 @@ class DataStatistics:
         area = data_class.area
         spatial_resolution = data_class.spatial_resolution
 
-        path_mean = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_average.nc"
-        path_std = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_std.nc"
-        path_min = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_min.nc"
-        path_max = f"data/{self.resolution.value}_{self._get_years_months_str()}_{area}_{spatial_resolution}deg_max.nc"
-
+        path_mean = f"../data/{self.resolution.value}_{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_average.nc"
+        path_std = f"../data/{self.resolution.value}_{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_std.nc"
+        path_min = f"../data/{self.resolution.value}_{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_min.nc"
+        path_max = f"../data/{self.resolution.value}_{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_max.nc"
         
         average.to_netcdf(path_mean)
         std.to_netcdf(path_std)

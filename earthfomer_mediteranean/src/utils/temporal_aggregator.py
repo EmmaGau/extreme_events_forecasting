@@ -8,6 +8,7 @@ from utils.scaler import DataScaler
 from utils.enums import StackType, Resolution
 from utils.statistics import DataStatistics
 from typing import List
+from utils.tools import AreaDataset
 
 # à la place faire une rolling mean
 # en gros l'idée c'est d'avoir en parametre le type de stack = [1,7,14,30]
@@ -19,17 +20,7 @@ from typing import List
 # faut faire attention si on saute d'une année à l'autre toujours regarder si on a assez de données pour créer la target
 
 MAPPING_SEASON= {"DJF": 0, "MAM": 1, "JJA": 2, "SON": 3}
-class AreaDataset:
-    def __init__(self, area: str, data: xr.Dataset, spatial_resolution: int, years : List[int], months: List[int], vars : List[str], target : str):
-        self.area = area
-        self.data = data
-        self.spatial_resolution = spatial_resolution
-        self.years = years
-        self.months = months
-        self.vars = vars
-        self.target = target
 
-    
 class TemporalAggregator:
     def __init__(self, dataset: AreaDataset, stack_number_input : int,lead_time_number : int, resolution_input : int, resolution_output: int, scaler: DataScaler, scaling_years: List[int], scaling_months: List[int], gap : int =0):
         self.name = "TemporalAggregator"
@@ -82,7 +73,6 @@ class TemporalAggregator:
     
     def compute_len_dataset(self):
         length = 0
-        print('wet season len', len(self.wet_season_data))
         for _, wet_season in self.wet_season_data:
             length += self._compute_number_samples_in_season(wet_season)
         return length
