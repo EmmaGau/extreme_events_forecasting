@@ -1,104 +1,3 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.optim import Adam
-import pytorch_lightning as pl
-import torch.distributions as dist
-import earthformer
-from earthformer.cuboid_transformer.cuboid_transformer import CuboidTransformerModel
-import warnings
-from typing import Union, Dict
-from shutil import copyfile
-from copy import deepcopy
-import inspect
-import pickle
-import numpy as np
-import torch
-from torch import nn
-from torch.nn import functional as F
-from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR
-import torchmetrics
-import pytorch_lightning as pl
-from pytorch_lightning import loggers as pl_loggers
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, DeviceStatsMonitor, Callback
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from omegaconf import OmegaConf
-import os
-import argparse
-from einops import rearrange
-from pytorch_lightning import Trainer, seed_everything
-from earthformer.config import cfg
-from earthformer.utils.optim import SequentialLR, warmup_lambda
-from earthformer.utils.utils import get_parameter_names
-from earthformer.utils.checkpoint import pl_ckpt_to_pytorch_state_dict, s3_download_pretrained_ckpt
-from earthformer.utils.layout import layout_to_in_out_slice
-from earthformer.visualization.sevir.sevir_vis_seq import save_example_vis_results
-from earthformer.metrics.sevir import SEVIRSkillScore
-from earthformer.cuboid_transformer.cuboid_transformer import CuboidTransformerModel
-from earthformer.datasets.sevir.sevir_torch_wrap import SEVIRLightningDataModule
-from earthformer.utils.apex_ddp import ApexDDPStrategy
-
-
-class EarthformerEra(pl.LightningModule):
-    def __init__(self, wandb_config):
-        model_cfg = wandb_config["model"]
-        cuboid_transformer  = CuboidTransformerModel(
-            input_shape=model_cfg["input_shape"],
-            target_shape=model_cfg["target_shape"],
-            base_units=model_cfg["base_units"],
-            block_units=model_cfg["block_units"],
-            scale_alpha=model_cfg["scale_alpha"],
-            enc_depth=model_cfg["enc_depth"],
-            dec_depth=model_cfg["dec_depth"],
-            enc_use_inter_ffn=model_cfg["enc_use_inter_ffn"],
-            dec_use_inter_ffn=model_cfg["dec_use_inter_ffn"],
-            dec_hierarchical_pos_embed=model_cfg["dec_hierarchical_pos_embed"],
-            downsample=model_cfg["downsample"],
-            downsample_type=model_cfg["downsample_type"],
-            enc_attn_patterns=enc_attn_patterns,
-            dec_self_attn_patterns=dec_self_attn_patterns,
-            dec_cross_attn_patterns=dec_cross_attn_patterns,
-            dec_cross_last_n_frames=model_cfg["dec_cross_last_n_frames"],
-            dec_use_first_self_attn=model_cfg["dec_use_first_self_attn"],
-            num_heads=model_cfg["num_heads"],
-            attn_drop=model_cfg["attn_drop"],
-            proj_drop=model_cfg["proj_drop"],
-            ffn_drop=model_cfg["ffn_drop"],
-            upsample_type=model_cfg["upsample_type"],
-            ffn_activation=model_cfg["ffn_activation"],
-            gated_ffn=model_cfg["gated_ffn"],
-            norm_layer=model_cfg["norm_layer"],
-            # global vectors
-            num_global_vectors=model_cfg["num_global_vectors"],
-            use_dec_self_global=model_cfg["use_dec_self_global"],
-            dec_self_update_global=model_cfg["dec_self_update_global"],
-            use_dec_cross_global=model_cfg["use_dec_cross_global"],
-            use_global_vector_ffn=model_cfg["use_global_vector_ffn"],
-            use_global_self_attn=model_cfg["use_global_self_attn"],
-            separate_global_qkv=model_cfg["separate_global_qkv"],
-            global_dim_ratio=model_cfg["global_dim_ratio"],
-            # initial_downsample
-            initial_downsample_type=model_cfg["initial_downsample_type"],
-            initial_downsample_activation=model_cfg["initial_downsample_activation"],
-            # initial_downsample_type=="stack_conv"
-            initial_downsample_stack_conv_num_layers=model_cfg["initial_downsample_stack_conv_num_layers"],
-            initial_downsample_stack_conv_dim_list=model_cfg["initial_downsample_stack_conv_dim_list"],
-            initial_downsample_stack_conv_downscale_list=model_cfg["initial_downsample_stack_conv_downscale_list"],
-            initial_downsample_stack_conv_num_conv_list=model_cfg["initial_downsample_stack_conv_num_conv_list"],
-            # misc
-            padding_type=model_cfg["padding_type"],
-            z_init_method=model_cfg["z_init_method"],
-            checkpoint_level=model_cfg["checkpoint_level"],
-            pos_embed_type=model_cfg["pos_embed_type"],
-            use_relative_pos=model_cfg["use_relative_pos"],
-            self_attn_use_final_proj=model_cfg["self_attn_use_final_proj"],
-            # initialization
-            attn_linear_init_mode=model_cfg["attn_linear_init_mode"],
-            ffn_linear_init_mode=model_cfg["ffn_linear_init_mode"],
-            conv_init_mode=model_cfg["conv_init_mode"],
-            down_up_linear_init_mode=model_cfg["down_up_linear_init_mode"],
-            norm_init_mode=model_cfg["norm_init_mode"],
-        )
 import warnings
 from typing import Sequence
 from shutil import copyfile
@@ -132,13 +31,13 @@ exps_dir = os.path.join(_curr_dir, "experiments")
 pretrained_checkpoints_dir = cfg.pretrained_checkpoints_dir
 pytorch_state_dict_name = "earthformer_icarenso2021.pt"
 
-class CuboidENSOPLModule(pl.LightningModule):
+class CuboidERAModule(pl.LightningModule):
 
     def __init__(self,
                  total_num_steps: int,
                  oc_file: str = None,
                  save_dir: str = None):
-        super(CuboidENSOPLModule, self).__init__()
+        super(CuboidERAModule, self).__init__()
         if oc_file is not None:
             oc_from_file = OmegaConf.load(open(oc_file, "r"))
         else:
@@ -545,25 +444,8 @@ class CuboidENSOPLModule(pl.LightningModule):
         return int(epoch * num_samples / total_batch_size)
 
     @staticmethod
-    def get_enso_datamodule(
-            dataset_cfg,
-            micro_batch_size: int = 1,
-            num_workers: int = 8):
-        dm = ENSOLightningDataModule(
-            in_len=dataset_cfg["in_len"],
-            out_len=dataset_cfg["out_len"],
-            in_stride=dataset_cfg["in_stride"],
-            out_stride=dataset_cfg["out_stride"],
-            train_samples_gap=dataset_cfg["train_samples_gap"],
-            eval_samples_gap=dataset_cfg["eval_samples_gap"],
-            normalize_sst=dataset_cfg["normalize_sst"],
-            batch_size=micro_batch_size,
-            num_workers=num_workers)
-        return dm
+    def get_enso_datamodule():
 
-    @property
-    def nino_out_len(self):
-        return self.out_len - NINO_WINDOW_T + 1
 
     def forward(self, batch):
         r"""
@@ -572,23 +454,22 @@ class CuboidENSOPLModule(pl.LightningModule):
         nino_target
             shape = (N, out_len+NINO_WINDOW_T-1)
         """
-        sst_seq, nino_target = batch
-        data_seq = sst_seq.float().unsqueeze(-1)
-        in_seq = data_seq[:, :self.in_len, ...]  # (N, in_len, lat, lon, 1)
-        target_seq = data_seq[:, self.in_len:, ...]  # (N, in_len, lat, lon, 1)
-        pred_seq = self.torch_nn_module(in_seq)
-        loss = F.mse_loss(pred_seq, target_seq)
-        return pred_seq, loss, in_seq, target_seq, nino_target.float()
+        input, target = batch
+        input = input.float().unsqueeze(-1)  # (N, in_len, lat, lon, 1)
+        target = target.float().unsqueeze(-1) # (N, in_len, lat, lon, 1)
+        pred_seq = self.torch_nn_module(input)
+        loss = F.mse_loss(pred_seq, target)
+        return pred_seq, loss, input, target
 
     def training_step(self, batch, batch_idx):
-        pred_seq, loss, in_seq, target_seq, nino_target = self(batch)
-        micro_batch_size = in_seq.shape[self.batch_axis]
+        pred_seq, loss, input, target = self(batch)
+        micro_batch_size = input.shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
         if self.local_rank == 0:
             self.save_vis_step_end(
                 data_idx=data_idx,
-                context_seq=in_seq.detach().float().cpu().numpy(),
-                target_seq=target_seq.detach().float().cpu().numpy(),
+                context_seq=input.detach().float().cpu().numpy(),
+                target_seq=target.detach().float().cpu().numpy(),
                 pred_seq=pred_seq.detach().float().cpu().numpy(),
                 mode="train", )
         self.log('train_loss', loss, on_step=True, on_epoch=False)
@@ -598,7 +479,7 @@ class CuboidENSOPLModule(pl.LightningModule):
         micro_batch_size = batch[0].shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
         if not self.eval_example_only or data_idx in self.val_example_data_idx_list:
-            pred_seq, loss, in_seq, target_seq, nino_target = self(batch)
+            pred_seq, loss, in_seq, target_seq= self(batch)
             if self.local_rank == 0:
                 self.save_vis_step_end(
                     data_idx=data_idx,
@@ -610,34 +491,12 @@ class CuboidENSOPLModule(pl.LightningModule):
                 pred_seq = pred_seq.float()
             self.valid_mse(pred_seq, target_seq)
             self.valid_mae(pred_seq, target_seq)
-            nino_preds = sst_to_nino(sst=pred_seq[..., 0],
-                                     normalize_sst=self.normalize_sst)
-            return nino_preds, nino_target
 
     def validation_epoch_end(self, outputs):
         valid_mse = self.valid_mse.compute()
         valid_mae = self.valid_mae.compute()
-        nino_preds_list, nino_target_list = map(list, zip(*outputs))
-        nino_preds_list = torch.cat(nino_preds_list, dim=0)
-        nino_target_list = torch.cat(nino_target_list, dim=0)
-        valid_acc, valid_nino_rmse = compute_enso_score(
-            y_pred=nino_preds_list, y_true=nino_target_list,
-            acc_weight=None)
-        valid_weighted_acc, _ = compute_enso_score(
-            y_pred=nino_preds_list, y_true=nino_target_list,
-            acc_weight="default")
-        valid_acc /= self.nino_out_len
-        valid_nino_rmse /= self.nino_out_len
-        valid_weighted_acc /= self.nino_out_len
-        valid_loss = -valid_acc
-
-        self.log('valid_loss_epoch', valid_loss, prog_bar=True, on_step=False, on_epoch=True)
         self.log('valid_mse_epoch', valid_mse, prog_bar=True, on_step=False, on_epoch=True)
         self.log('valid_mae_epoch', valid_mae, prog_bar=True, on_step=False, on_epoch=True)
-        self.log('valid_corr_nino3.4_epoch', valid_acc, prog_bar=True, on_step=False, on_epoch=True)
-        self.log('valid_corr_nino3.4_weighted_epoch', valid_weighted_acc, prog_bar=True, on_step=False, on_epoch=True)
-        self.log('valid_nino_rmse_epoch', valid_nino_rmse, prog_bar=True, on_step=False, on_epoch=True)
-        self.valid_mse.reset()
         self.valid_mae.reset()
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
@@ -656,31 +515,13 @@ class CuboidENSOPLModule(pl.LightningModule):
                 pred_seq = pred_seq.float()
             self.test_mse(pred_seq, target_seq)
             self.test_mae(pred_seq, target_seq)
-            nino_preds = sst_to_nino(sst=pred_seq[..., 0],
-                                     normalize_sst=self.normalize_sst)
-            return nino_preds, nino_target
 
     def test_epoch_end(self, outputs):
         test_mse = self.test_mse.compute()
         test_mae = self.test_mae.compute()
-        nino_preds_list, nino_target_list = map(list, zip(*outputs))
-        nino_preds_list = torch.cat(nino_preds_list, dim=0)
-        nino_target_list = torch.cat(nino_target_list, dim=0)
-        test_acc, test_nino_rmse = compute_enso_score(
-            y_pred=nino_preds_list, y_true=nino_target_list,
-            acc_weight=None)
-        test_weighted_acc, _ = compute_enso_score(
-            y_pred=nino_preds_list, y_true=nino_target_list,
-            acc_weight="default")
-        test_acc /= self.nino_out_len
-        test_nino_rmse /= self.nino_out_len
-        test_weighted_acc /= self.nino_out_len
 
         self.log('test_mse_epoch', test_mse, prog_bar=True, on_step=False, on_epoch=True)
         self.log('test_mae_epoch', test_mae, prog_bar=True, on_step=False, on_epoch=True)
-        self.log('test_corr_nino3.4_epoch', test_acc, prog_bar=True, on_step=False, on_epoch=True)
-        self.log('test_corr_nino3.4_weighted_epoch', test_weighted_acc, prog_bar=True, on_step=False, on_epoch=True)
-        self.log('test_nino_rmse_epoch', test_nino_rmse, prog_bar=True, on_step=False, on_epoch=True)
         self.test_mse.reset()
         self.test_mae.reset()
 
@@ -738,25 +579,25 @@ def main():
         max_epochs = oc_from_file.optim.max_epochs
         seed = oc_from_file.optim.seed
     else:
-        dataset_cfg = OmegaConf.to_object(CuboidENSOPLModule.get_dataset_config())
+        dataset_cfg = OmegaConf.to_object(CuboidERAModule.get_dataset_config())
         micro_batch_size = 1
         total_batch_size = int(micro_batch_size * args.gpus)
         max_epochs = None
         seed = 0
     seed_everything(seed, workers=True)
-    dm = CuboidENSOPLModule.get_enso_datamodule(
+    dm = CuboidERAModule.get_enso_datamodule(
         dataset_cfg=dataset_cfg,
         micro_batch_size=micro_batch_size,
         num_workers=1, )
     dm.prepare_data()
     dm.setup()
     accumulate_grad_batches = total_batch_size // (micro_batch_size * args.gpus)
-    total_num_steps = CuboidENSOPLModule.get_total_num_steps(
+    total_num_steps = CuboidERAModule.get_total_num_steps(
         epoch=max_epochs,
         num_samples=dm.num_train_samples,
         total_batch_size=total_batch_size,
     )
-    pl_module = CuboidENSOPLModule(
+    pl_module = CuboidERAModule(
         total_num_steps=total_num_steps,
         save_dir=args.save,
         oc_file=args.cfg)

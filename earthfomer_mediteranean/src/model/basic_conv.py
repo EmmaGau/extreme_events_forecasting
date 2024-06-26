@@ -38,7 +38,7 @@ class Conv3DEra(pl.LightningModule):
         x, y = batch
         alpha, beta = self.forward(x)
         gamma_dist = dist.Gamma(alpha, beta)
-        loss = -gamma_dist.log_prob(y).mean()  # Negative log likelihood
+        loss = -gamma_dist.log_prob(y).mean()
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
     
@@ -46,14 +46,14 @@ class Conv3DEra(pl.LightningModule):
         x, y = batch
         alpha, beta = self.forward(x)
         gamma_dist = dist.Gamma(alpha, beta)
-        loss = -gamma_dist.log_prob(y).mean()  # Negative log likelihood
+        loss = -gamma_dist.log_prob(y).mean()  
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
     
     def test_step(self, batch, batch_idx):
         x, y = batch
         alpha, beta = self.forward(x)
         gamma_dist = dist.Gamma(alpha, beta)
-        loss = -gamma_dist.log_prob(y).mean()  # Negative log likelihood
+        loss = -gamma_dist.log_prob(y).mean()  
         self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
     
     def configure_optimizers(self):
@@ -75,7 +75,7 @@ if __name__ == "__main__":
             'variables_nh': [],
             'variables_med': ['tp'],
             'target_variable': 'tp',
-            'relevant_years': list(range(2005,2011)),
+            'relevant_years': TRAINING_YEARS,
             'relevant_months': [10,11,12,1,2,3],
             'land_sea_mask': '/scistor/ivm/shn051/extreme_events_forecasting/primary_code/data/ERA5_land_sea_mask_1deg.nc',
             'spatial_resolution': 1,
@@ -89,7 +89,7 @@ if __name__ == "__main__":
             'lead_time_number': 3,
             'resolution_input': 7,
             'resolution_output': 7,
-            'scaling_years': list(range(2005,2011)),
+            'scaling_years': TRAINING_YEARS,
             'scaling_months': [10,11,12,1,2,3], 
             'gap': 1,
         }
