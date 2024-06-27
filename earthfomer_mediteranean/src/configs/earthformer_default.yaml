@@ -18,7 +18,7 @@ data:
     relevant_months: [10, 11, 12, 1, 2, 3]
     land_sea_mask: '/scistor/ivm/shn051/extreme_events_forecasting/primary_code/data/ERA5_land_sea_mask_1deg.nc'
     spatial_resolution: 1
-    predict_sea_land: true
+    predict_sea_land: false 
   scaler:
     mode: 'standardize'
   temporal_aggregator:
@@ -32,8 +32,8 @@ data:
 
 model:
   data_channels: 1
-  input_shape: [3, 24, 48, 1]
-  target_shape: [3, 24, 48, 1]
+  input_shape: [3, 15, 50, 1]
+  target_shape: [3, 15, 50, 1]
   base_units: 64
   block_units: null
   scale_alpha: 1.0

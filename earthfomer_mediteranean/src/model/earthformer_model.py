@@ -226,7 +226,6 @@ class CuboidERAModule(pl.LightningModule):
             # log
             logger=logger,
             log_every_n_steps=log_every_n_steps,
-            track_grad_norm=self.oc.logging.track_grad_norm,
             # save
             default_root_dir=self.save_dir,
             # ddp
@@ -292,9 +291,10 @@ class CuboidERAModule(pl.LightningModule):
 
     def forward(self, batch):
         input, target = batch
-        input = input.float().unsqueeze(-1)  # (N, in_len, lat, lon, 1)
-        target = target.float().unsqueeze(-1) # (N, in_len, lat, lon, 1)
+        input = input.float() # (N, in_len, lat, lon, 1)
+        target = target.float()# (N, in_len, lat, lon, 1)
         pred_seq = self.torch_nn_module(input)
+        print(pred_seq.shape, target.shape)
         loss = F.mse_loss(pred_seq, target)
         return pred_seq, loss, input, target
 
@@ -329,7 +329,7 @@ class CuboidERAModule(pl.LightningModule):
             self.valid_mse(pred_seq, target_seq)
             self.valid_mae(pred_seq, target_seq)
 
-    def validation_epoch_end(self, outputs):
+    def on_validation_epoch_end(self, outputs):
         valid_mse = self.valid_mse.compute()
         valid_mae = self.valid_mae.compute()
         self.log('valid_mse_epoch', valid_mse, prog_bar=True, on_step=False, on_epoch=True)
@@ -406,8 +406,6 @@ def get_parser():
 def main():
     parser = get_parser()
     args = parser.parse_args()
-    if args.pretrained:
-        args.cfg = os.path.abspath(os.path.join(os.path.dirname(__file__), "earthformer_enso_v1.yaml"))
     if args.cfg is not None:
         oc_from_file = OmegaConf.load(open(args.cfg, "r"))
         dataset_cfg = OmegaConf.to_object(oc_from_file.data)
@@ -442,7 +440,7 @@ def main():
     )
     trainer = Trainer(**trainer_kwargs)
 
-    trainer.fit(model=pl_module, train_dataloader=train_dl, val_dataloaders=val_dl)
+    trainer.fit(model=pl_module, train_dataloaders=train_dl, val_dataloaders=val_dl)
     # state_dict = pl_ckpt_to_pytorch_state_dict(checkpoint_path=trainer.checkpoint_callback.best_model_path,
     #                                             map_location=torch.device("cpu"),
     #                                             delete_prefix_len=len("torch_nn_module."))
