@@ -89,7 +89,7 @@ class TemporalAggregator:
     
     def scale(self, wet_season: xr.DataArray,data: xr.DataArray, idx : int):
         self.stat_idx = self.find_resolution_idx(self.scaling_resolution, wet_season, idx)
-        related_stats = {key: value.sel(**{f"{self.scaling_resolution.value}": self.stat_idx}) for key, value in self.statistics.items()}
+        related_stats = {key: value.sel(**{f"{self.scaling_resolution.value}": self.stat_idx}, method="nearest") for key, value in self.statistics.items()}
         return self.scaler.scale(data, related_stats)
 
     def aggregate(self, idx: int):
