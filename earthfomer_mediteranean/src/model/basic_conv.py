@@ -63,9 +63,9 @@ if __name__ == "__main__":
     from torch.utils.data import DataLoader, TensorDataset
     import pytorch_lightning as pl
 
-    TRAINING_YEARS = list(range(1940, 1990))
-    VAL_YEARS = list(range(1990, 2005))
-    TEST_YEARS = list(range(2005, 2023))
+    TRAINING_YEARS = list(range(1940, 1950))
+    VAL_YEARS = list(range(1990, 2000))
+    TEST_YEARS = list(range(2005, 2015))
 
     data_dirs = {'mediteranean': {'tp':"/scistor/ivm/data_catalogue/reanalysis/ERA5_0.25/PR/PR_era5_MED_1degr_19400101_20240229.nc"},
                  'north_hemisphere': {}}
