@@ -49,6 +49,12 @@ class DatasetEra(Dataset):
         self.last_year = self.med_data.time.dt.year.max().item()
 
         self.land_sea_mask = self.get_binary_sea_mask()
+
+    def expand_year_range(self,year_range):
+        if len(year_range) != 2:
+            raise ValueError("Year range must be specified as [start_year, end_year]")
+        start_year, end_year = year_range
+        return list(range(start_year, end_year + 1))
         
     def _initialize_config(self, wandb_config):
         """Initialize configuration settings."""
@@ -59,7 +65,7 @@ class DatasetEra(Dataset):
         self.variables_med = ds_conf["variables_med"]
         self.mask_path = ds_conf["land_sea_mask"]
         self.relevant_months = ds_conf["relevant_months"]
-        self.relevant_years = ds_conf["relevant_years"]
+        self.relevant_years =  self.expand_year_range(ds_conf["relevant_years"])
         self.predict_sea_land= ds_conf["predict_sea_land"]
 
     def _load_and_prepare_data(self):
@@ -91,7 +97,7 @@ class DatasetEra(Dataset):
     
     def _load_data(self, dir_path):
         """Load data from a specified directory using xarray."""
-        ds = xr.open_dataset(dir_path)
+        ds = xr.open_dataset(dir_path, chunks = None)
         ds = self._filter_data_by_time(ds)
         return ds
     
@@ -191,13 +197,13 @@ class DatasetEra(Dataset):
         # target preparation
         target_tensor = self._prepare_target(med_target_aggregated) # size (batch_size, height, width, channels)
         print("target_tensor", target_tensor.shape)
-        
+        print("input_tensor", input_tensor.shape)
         return input_tensor, target_tensor
 
 
     
 if __name__ == "__main__":
-    data_dirs = {'mediteranean': {'tp':"/scistor/ivm/data_catalogue/reanalysis/ERA5_0.25/PR/PR_era5_MED_1degr_19400101_20240229.nc"},
+    data_dirs = {'mediteranean': {'tp':"/home/egauillard/data/PR_era5_MED_1degr_19400101_20240229_new.nc"},
                  'north_hemisphere': {}}
 
     wandb_config = {
@@ -205,11 +211,11 @@ if __name__ == "__main__":
         'variables_nh': [],
         'variables_med': ['tp'],
         'target_variable': 'tp',
-        'relevant_years': list(range(2005,2011)),
+        'relevant_years': [2005,2011],
         'relevant_months': [10,11,12,1,2,3],
-        'land_sea_mask': '/scistor/ivm/shn051/extreme_events_forecasting/primary_code/data/ERA5_land_sea_mask_1deg.nc',
+        'land_sea_mask': '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc',
         'spatial_resolution': 1,
-        'predict_sea_land': True,
+        'predict_sea_land': False,
     },
     'scaler': {
         'mode': 'standardize'
@@ -219,7 +225,7 @@ if __name__ == "__main__":
         'lead_time_number': 3,
         'resolution_input': 7,
         'resolution_output': 7,
-        'scaling_years': list(range(2005,2011)),
+        'scaling_years': [2005,2011],
         'scaling_months': [10,11,12,1,2,3], 
         'gap': 1,
     }
@@ -239,3 +245,4 @@ if __name__ == "__main__":
     dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
 
     sample = next(iter(dataloader))
+

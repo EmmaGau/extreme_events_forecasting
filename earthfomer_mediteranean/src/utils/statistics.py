@@ -11,7 +11,9 @@ class DataStatistics:
         self.months = months
     
     def _get_years_months_str(self):
-        return f"{'-'.join(map(str, self.years))}_{'-'.join(map(str, self.months))}"
+        # instead of giving the whole years just give the min and max 
+        years = [str(min(self.years)), str(max(self.years))]
+        return f"{'-'.join(map(str, years))}_{'-'.join(map(str, self.months))}"
     
     def get_vars_stats_str(self, data_class : AreaDataset):
         vars = data_class.vars
@@ -41,6 +43,7 @@ class DataStatistics:
         # check we have the right year and months 
         data= data.sel(time = data.time.dt.year.isin(self.years))
         data = data.sel(time = data.time.dt.month.isin(self.months))
+        print(data.groupby(f"time.{self.resolution.value}"))
        
         average = data.groupby(f"time.{self.resolution.value}").mean(dim = "time")
         std = data.groupby(f"time.{self.resolution.value}").std(dim = "time")

@@ -26,6 +26,7 @@ class TemporalAggregator:
         self.name = "TemporalAggregator"
         # dataset parameters 
         self.dataset = dataset
+        scaling_years = self.expand_year_range(scaling_years)
 
         # aggregation parameters
         self.stack_number_input = stack_number_input
@@ -47,6 +48,12 @@ class TemporalAggregator:
         self._current_temporal_idx = 0
         self.current_wet_season_year = list(self.wet_season_data.groups.keys())[0]
         self._temporal_idx_maping = {}
+
+    def expand_year_range(self,year_range):
+        if len(year_range) != 2:
+            raise ValueError("Year range must be specified as [start_year, end_year]")
+        start_year, end_year = year_range
+        return list(range(start_year, end_year + 1))
 
     def get_scaling_resolution(self):
         if 1<= self.resolution_input <= 5:
@@ -124,7 +131,10 @@ class TemporalAggregator:
 
         # stack mean for 
         for i in range(0,self.stack_number_input):
-            mean_input = input_window.sel(time = input_time_indexes[i*self.resolution_input:(i+1)*self.resolution_input]).mean(dim = "time") # data array 1 value per cell of the grid
+            print(input_time_indexes[i*self.resolution_input:(i+1)*self.resolution_input])
+
+            mean_input = input_window.sel(time = input_time_indexes[i*self.resolution_input:(i+1)*self.resolution_input]).mean(dim = "time")
+             # data array 1 value per cell of the grid
             scaled_input = self.scale(wet_season,mean_input, self._current_temporal_idx + i*self.resolution_input)
             input_data.append(scaled_input)
         for i in range(0,self.lead_time_number):

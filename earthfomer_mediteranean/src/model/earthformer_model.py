@@ -36,8 +36,8 @@ exps_dir = os.path.join(_curr_dir, "experiments")
 pretrained_checkpoints_dir = cfg.pretrained_checkpoints_dir
 pytorch_state_dict_name = "earthformer_icarenso2021.pt"
 
-VAL_YEARS = [2016, 2017, 2018, 2019]
-TEST_YEARS = [2020, 2021]
+VAL_YEARS = [1990, 2009]
+TEST_YEARS = [2009, 2024]
 class CuboidERAModule(pl.LightningModule):
 
     def __init__(self,
@@ -281,6 +281,9 @@ class CuboidERAModule(pl.LightningModule):
         train_dataset = DatasetEra(train_config, data_dirs, temp_aggregator_factory)
         val_dataset = DatasetEra(val_config, data_dirs, temp_aggregator_factory)
         test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory)
+        print("len train_dataset", len(train_dataset))
+        print("len val_dataset", len(val_dataset))
+        print("len test_dataset", len(test_dataset))
         
         train_dataloader = DataLoader(train_dataset, batch_size=micro_batch_size, shuffle=True, num_workers=4)
         val_dataloader = DataLoader(val_dataset, batch_size=micro_batch_size, shuffle=False, num_workers=4)
@@ -324,17 +327,23 @@ class CuboidERAModule(pl.LightningModule):
                     target_seq=target_seq.detach().float().cpu().numpy(),
                     pred_seq=pred_seq.detach().float().cpu().numpy(),
                     mode="val", )
-            if self.precision == 16:
-                pred_seq = pred_seq.float()
             self.valid_mse(pred_seq, target_seq)
             self.valid_mae(pred_seq, target_seq)
+            self.log('valid_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        
+        return {'loss': loss}
 
-    def on_validation_epoch_end(self, outputs):
+    def on_validation_epoch_end(self):
         valid_mse = self.valid_mse.compute()
         valid_mae = self.valid_mae.compute()
-        self.log('valid_mse_epoch', valid_mse, prog_bar=True, on_step=False, on_epoch=True)
-        self.log('valid_mae_epoch', valid_mae, prog_bar=True, on_step=False, on_epoch=True)
+        valid_loss = self.trainer.callback_metrics['valid_loss']
+        
+        self.log('valid_mse_epoch', valid_mse, prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log('valid_mae_epoch', valid_mae, prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log('valid_loss_epoch', valid_loss, prog_bar=True, on_epoch=True, sync_dist=True)
+        
         self.valid_mae.reset()
+        self.valid_mse.reset()
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         micro_batch_size = batch[0].shape[self.batch_axis]
