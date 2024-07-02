@@ -9,12 +9,14 @@ data:
   data_dirs:
       mediteranean:
         tp: '/home/egauillard/data/PR_era5_MED_1degr_19400101_20240229_new.nc'
-      north_hemisphere: {}
+        t2m: '/home/egauillard/data/T2M_era5_MED_1degr_19400101_20240229_new.nc'
+      north_hemisphere: 
+        mslp: "/home/egauillard/data/MSLP_era5_NHExt_1degr_19400101_20240229_new.nc"
   dataset:
     variables_nh: []
-    variables_med: ['tp']
+    variables_med: ['tp', 't2m']
     target_variable: 'tp'
-    relevant_years: [1950, 1980]
+    relevant_years: [1940, 1990]
     relevant_months: [10, 11, 12, 1, 2, 3]
     land_sea_mask: '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc'
     spatial_resolution: 1
@@ -26,13 +28,13 @@ data:
     lead_time_number: 3
     resolution_input: 7
     resolution_output: 7
-    scaling_years: [1950, 1980]
+    scaling_years: [1940, 1990]
     scaling_months: [10, 11, 12, 1, 2, 3]
     gap: 1
 
 model:
   data_channels: 1
-  input_shape: [3, 15, 50, 1]
+  input_shape: [3, 15, 50, 2]
   target_shape: [3, 15, 50, 1]
   base_units: 64
   block_units: null
@@ -65,7 +67,7 @@ model:
   gated_ffn: false
   norm_layer: "layer_norm"
   padding_type: "zeros"
-  pos_embed_type: "t+hw"
+  pos_embed_type: "t+h+w"
   use_relative_pos: true
   self_attn_use_final_proj: true
   dec_use_first_self_attn: false
@@ -90,7 +92,7 @@ optim:
   lr: 0.001
   wd: 0.00001
   gradient_clip_val: 1.0
-  max_epochs: 50
+  max_epochs: 200
   warmup_percentage: 0.2
   lr_scheduler_mode: "cosine"
   min_lr_ratio: 0.1

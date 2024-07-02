@@ -14,7 +14,7 @@ data:
     variables_nh: []
     variables_med: ['tp']
     target_variable: 'tp'
-    relevant_years: [1950, 1980]
+    relevant_years: [1940, 1990]
     relevant_months: [10, 11, 12, 1, 2, 3]
     land_sea_mask: '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc'
     spatial_resolution: 1
@@ -26,7 +26,7 @@ data:
     lead_time_number: 3
     resolution_input: 7
     resolution_output: 7
-    scaling_years: [1950, 1980]
+    scaling_years: [1940, 1990]
     scaling_months: [10, 11, 12, 1, 2, 3]
     gap: 1
 
@@ -90,7 +90,7 @@ optim:
   lr: 0.001
   wd: 0.00001
   gradient_clip_val: 1.0
-  max_epochs: 50
+  max_epochs: 200
   warmup_percentage: 0.2
   lr_scheduler_mode: "cosine"
   min_lr_ratio: 0.1
