@@ -6,5 +6,10 @@ data/*
 *.err
 *.out
 wandb/
+extreme_events_env
+experiments
+*.err
+*.out
 
-lightning_logs/
+
+lightning_logs

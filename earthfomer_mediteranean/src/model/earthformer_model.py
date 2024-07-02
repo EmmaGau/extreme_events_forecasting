@@ -406,25 +406,23 @@ def get_parser():
 def main():
     parser = get_parser()
     args = parser.parse_args()
-    if args.cfg is not None:
-        oc_from_file = OmegaConf.load(open(args.cfg, "r"))
-        dataset_cfg = OmegaConf.to_object(oc_from_file.data)
-        total_batch_size = oc_from_file.optim.total_batch_size
-        micro_batch_size = oc_from_file.optim.micro_batch_size
-        max_epochs = oc_from_file.optim.max_epochs
-        seed = oc_from_file.optim.seed
-    else:
-        dataset_cfg = OmegaConf.to_object(CuboidERAModule.get_dataset_config())
-        micro_batch_size = 1
-        total_batch_size = int(micro_batch_size * args.gpus)
-        max_epochs = None
-        seed = 0
+
+    if args.cfg is None:
+        args.cfg = "configs/earthformer_default.yaml"
+    
+    oc_from_file = OmegaConf.load(open(args.cfg, "r"))
+    dataset_cfg = OmegaConf.to_object(oc_from_file.data)
+    total_batch_size = oc_from_file.optim.total_batch_size
+    micro_batch_size = oc_from_file.optim.micro_batch_size
+    max_epochs = oc_from_file.optim.max_epochs
+    seed = oc_from_file.optim.seed
+        
     seed_everything(seed, workers=True)
 
     train_dl, val_dl, test_dl = CuboidERAModule.get_dataloaders(dataset_cfg, total_batch_size, micro_batch_size, VAL_YEARS, TEST_YEARS)
 
-
     accumulate_grad_batches = total_batch_size // (micro_batch_size * args.gpus)
+
     total_num_steps = CuboidERAModule.get_total_num_steps(
         epoch=max_epochs,
         num_samples=  len(train_dl.dataset),
@@ -434,6 +432,7 @@ def main():
         total_num_steps=total_num_steps,
         save_dir=args.save,
         config_file_path=args.cfg,)
+    
     trainer_kwargs = pl_module.set_trainer_kwargs(
         devices=args.gpus,
         accumulate_grad_batches=accumulate_grad_batches,

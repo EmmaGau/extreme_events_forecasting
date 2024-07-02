@@ -1,0 +1,7 @@
+torchmetrics
+torch
+torchvision
+torchaudio
+pytorch-lightning
+wandb
+git+https://github.com/amazon-science/earth-forecasting-transformer.git

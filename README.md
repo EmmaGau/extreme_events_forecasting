@@ -12,3 +12,12 @@ End-of-studies internship project
  ┣ 📂model
  ┗ 📂utils
  ```
+
+```
+python -m venv pyenv
+pip install git+https://github.com/amazon-science/earth-forecasting-transformer.git
+pip install torchmetrics
+pip install torch torchvision torchaudio
+pip install pytorch_lightining
+pip install wandb
+```
