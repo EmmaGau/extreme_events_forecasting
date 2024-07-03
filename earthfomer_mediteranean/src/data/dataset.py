@@ -68,21 +68,70 @@ class DatasetEra(Dataset):
         self.relevant_years =  self.expand_year_range(ds_conf["relevant_years"])
         self.predict_sea_land= ds_conf["predict_sea_land"]
 
+    def check_dataset(self, reference_dataset, new_dataset, variable_name):
+        """
+        Vérifie si le nouveau dataset a les mêmes coordonnées temps, latitude et longitude que le dataset de référence.
+        Si non, trouve l'intersection des coordonnées et ajuste les deux datasets.
+        
+        :param reference_dataset: Le dataset à utiliser comme référence
+        :param new_dataset: Le dataset à vérifier et potentiellement ajuster
+        :param variable_name: Le nom de la variable dans le nouveau dataset
+        :return: Tuple de (dataset de référence ajusté, nouveau dataset ajusté)
+        """
+        if reference_dataset is None or len(reference_dataset.data_vars) == 0:
+            return reference_dataset, new_dataset
+
+        reference_dataset['time'] = reference_dataset.time.dt.floor('D')
+        new_dataset['time'] = new_dataset.time.dt.floor('D')
+        
+        # Supprime les temps en double s'il y en a
+        reference_dataset = reference_dataset.drop_duplicates(dim='time')
+        new_dataset = new_dataset.drop_duplicates(dim='time')
+        
+        common_time = np.intersect1d(reference_dataset.time, new_dataset.time)
+        if len(common_time) != len(reference_dataset.time) or len(common_time) != len(new_dataset.time):
+            print(f"Attention : Décalage temporel pour {variable_name}. Ajustement aux temps communs...")
+            reference_dataset = reference_dataset.sel(time=common_time)
+            new_dataset = new_dataset.sel(time=common_time)
+        
+        # Vérifie et ajuste la latitude et la longitude
+        for dim in ['latitude', 'longitude']:
+            if dim in reference_dataset.dims and dim in new_dataset.dims:
+                common_coords = np.intersect1d(reference_dataset[dim], new_dataset[dim])
+                if len(common_coords) != len(reference_dataset[dim]) or len(common_coords) != len(new_dataset[dim]):
+                    print(f"Attention : Décalage de {dim} pour {variable_name}. Ajustement aux coordonnées communes...")
+                    reference_dataset = reference_dataset.sel({dim: common_coords})
+                    new_dataset = new_dataset.sel({dim: common_coords})
+        
+        return reference_dataset, new_dataset
+
+
     def _load_and_prepare_data(self):
         """Load data from directories for all variables and create big dataset that contains all variables for both regions
             and keep the relevant years/months."""
-        med_data = xr.Dataset() if len(self.variables_med) !=0 else None
-        nh_data = xr.Dataset() if len(self.variables_nh) !=0 else None
-        
-        # Load Mediterranean data
+        med_datasets = []
+        nh_datasets = []
+
         for var in self.variables_med:
-            data = self._load_data(self.data_dirs['mediteranean'][var])
-            med_data[var] = data[var]
-        # Load North Hemisphere data
-        for var in self.variables_nh:
-            data = self._load_data(self.data_dirs['north_hemisphere'][var])
-            nh_data[var] = data[var]
+            med_data = self._load_data(self.data_dirs['mediteranean'][var])
+            if med_datasets:
+                med_datasets[0], med_data = self.check_dataset(med_datasets[0], med_data, var)
+            med_datasets.append(med_data)
         
+        med_data = xr.merge(med_datasets, compat='override', join='inner')
+
+        for var in self.variables_nh:
+            nh_data = self._load_data(self.data_dirs['north_hemisphere'][var])
+            if nh_datasets:
+                nh_datasets[0], nh_data = self.check_dataset(nh_datasets[0], nh_data, var)
+            nh_datasets.append(nh_data)
+        
+        if nh_datasets:
+            nh_data = xr.merge(nh_datasets, compat='override', joiner='inner')
+        else:
+            nh_data = None
+
+
         # change resolution if necessary
         if self.spatial_resolution !=1:
             med_data = self.change_spatial_resolution(med_data, self.spatial_resolution)
@@ -203,13 +252,15 @@ class DatasetEra(Dataset):
 
     
 if __name__ == "__main__":
-    data_dirs = {'mediteranean': {'tp':"/home/egauillard/data/PR_era5_MED_1degr_19400101_20240229_new.nc"},
+    data_dirs = {'mediteranean': {'tp':"/home/egauillard/data/PR_era5_MED_1degr_19400101_20240229_new.nc",
+                                  't2m':"/home/egauillard/data/T2M_era5_MED_1degr_19400101-20240229.nc"},
+                 
                  'north_hemisphere': {}}
 
     wandb_config = {
     'dataset': {
         'variables_nh': [],
-        'variables_med': ['tp'],
+        'variables_med': ['tp', "t2m"],
         'target_variable': 'tp',
         'relevant_years': [2005,2011],
         'relevant_months': [10,11,12,1,2,3],

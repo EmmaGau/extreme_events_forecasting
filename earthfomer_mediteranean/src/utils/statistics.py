@@ -29,10 +29,10 @@ class DataStatistics:
         path_max = f"statistics/{self.resolution.value}_{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_max.nc"
 
         if os.path.exists(path_mean) and os.path.exists(path_std) and os.path.exists(path_min) and os.path.exists(path_max):
-            average = xr.open_dataarray(path_mean)
-            std = xr.open_dataarray(path_std)
-            min = xr.open_dataarray(path_min)
-            max = xr.open_dataarray(path_max)
+            average = xr.open_dataset(path_mean)
+            std = xr.open_dataset(path_std)
+            min = xr.open_dataset(path_min)
+            max = xr.open_dataset(path_max)
         else:
             average, std, min, max = self._compute_stats(data_class)
             self.save_stats(data_class, average, std, min, max)
