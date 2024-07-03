@@ -29,7 +29,7 @@ from data.dataset import DatasetEra
 from torch.utils.data import DataLoader
 from utils.scaler import DataScaler
 from utils.temporal_aggregator import TemporalAggregatorFactory
-
+import datetime
 
 _curr_dir = os.path.realpath(os.path.dirname(os.path.realpath(__file__)))
 exps_dir = os.path.join(_curr_dir, "experiments")
@@ -400,9 +400,13 @@ class CuboidERAModule(pl.LightningModule):
                 # TODO: add visualization
                 pass
 
+def default_save_name():
+    now = datetime.now()
+    return f"earthformer_era_{now.strftime('%Y%m%d_%H%M%S')}"
+
 def get_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--save', default='earthformer_era', type=str)
+    parser.add_argument('--save', default=default_save_name, type=str)
     parser.add_argument('--gpus', default=1, type=int)
     parser.add_argument('--cfg', default=None, type=str)
     parser.add_argument('--test', action='store_true')
