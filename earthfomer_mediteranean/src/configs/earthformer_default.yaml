@@ -9,9 +9,9 @@ data:
   data_dirs:
       mediteranean:
         tp: '/home/egauillard/data/PR_era5_MED_1degr_19400101_20240229_new.nc'
-        t2m: '/home/egauillard/data/T2M_era5_MED_1degr_19400101_20240229_new.nc'
+        t2m: '/home/egauillard/data/T2M_era5_MED_1degr_19400101_20240229.nc'
       north_hemisphere: 
-        mslp: "/home/egauillard/data/MSLP_era5_NHExt_1degr_19400101_20240229_new.nc"
+        mslp: "/home/egauillard/data/MSLP_era5_NHExt_1degr_19400101_20240229.nc"
   dataset:
     variables_nh: []
     variables_med: ['tp', 't2m']

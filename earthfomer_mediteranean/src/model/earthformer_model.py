@@ -421,7 +421,7 @@ def main():
     args = parser.parse_args()
 
     if args.cfg is None:
-        args.cfg = "configs/earthformer_default.yaml"
+        args.cfg = "/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/configs/earthformer_default.yaml"
     
     oc_from_file = OmegaConf.load(open(args.cfg, "r"))
     dataset_cfg = OmegaConf.to_object(oc_from_file.data)
