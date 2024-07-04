@@ -11,10 +11,13 @@ class DataStatistics:
         self.months = months
     
     def _get_years_months_str(self):
-        # instead of giving the whole years just give the min and max 
-        years = [str(min(self.years)), str(max(self.years))]
-        return f"{'-'.join(map(str, years))}_{'-'.join(map(str, self.months))}"
-    
+        # Get the minimum and maximum years
+        years_range = f"{min(self.years)}-{max(self.years)}"
+        # Join the months into a string
+        months_str = '-'.join(map(str, self.months))
+        # Combine the years range and months string
+        return f"{years_range}_{months_str}"
+        
     def get_vars_stats_str(self, data_class : AreaDataset):
         vars = data_class.vars
         return "_".join(vars)
