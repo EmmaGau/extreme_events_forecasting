@@ -127,10 +127,9 @@ class DatasetEra(Dataset):
             nh_datasets.append(nh_data)
         
         if nh_datasets:
-            nh_data = xr.merge(nh_datasets, compat='override', joiner='inner')
+            nh_data = xr.merge(nh_datasets, compat='override', join='inner')
         else:
             nh_data = None
-
 
         # change resolution if necessary
         if self.spatial_resolution !=1:
@@ -163,22 +162,45 @@ class DatasetEra(Dataset):
 
     def remap_MED_to_NH(self, nh_data, med_data):
         """Remap Mediterranean data to North Hemisphere grid and pad with zeros."""
-        # Empty array same dimensions and coordinates as nh_data
-        fill_values = {var: 0 for var in nh_data.data_vars}
-        remapped_data = xr.full_like(nh_data, fill_value=fill_values)
+        # Find the overlap region
+        med_lon_min, med_lon_max = med_data.longitude.min().item(), med_data.longitude.max().item()
+        med_lat_min, med_lat_max = med_data.latitude.min().item(), med_data.latitude.max().item()
 
-        # Find the overlap region and assign Mediterranean data to the remapped data
-        med_lon_min, med_lon_max = med_data.min(dim = "longitude"), med_data.max(dim = "longitude")
-        med_lat_min, med_lat_max = med_data.min(dim = "latitude"), med_data.max(dim = "latitude")
-
-        # replace the values of the remapped data with the mediteranean data
-        remapped_data = remapped_data.where(
-            (remapped_data.longitude >= med_lon_min) & (remapped_data.longitude <= med_lon_max) &
-            (remapped_data.latitude >= med_lat_min) & (remapped_data.latitude <= med_lat_max),
-            other = med_data
+        # Create a mask for the Mediterranean region in the NH grid
+        mask = (
+            (nh_data.longitude >= med_lon_min) & (nh_data.longitude <= med_lon_max) &
+            (nh_data.latitude >= med_lat_min) & (nh_data.latitude <= med_lat_max)
         )
+
+        # Get a reference variable from NH data for shape
+        nh_ref_var = [var for var in nh_data.data_vars if var != 'time_bnds'][0]
+        nh_shape = nh_data[nh_ref_var]
+
+        # Create a new dataset
+        remapped_data = xr.Dataset()
+
+        # Fill in the Mediterranean region
+        for var in med_data.data_vars:
+            if var == 'time_bnds':
+                # Just copy time_bnds as is
+                remapped_data[var] = med_data[var].copy()
+            else:
+                # Check the structure of the current variable
+                if set(med_data[var].dims) == set(nh_shape.dims):
+                    # If dimensions match, create a zero-filled DataArray and fill with med data
+                    remapped_var = xr.zeros_like(nh_shape)
+                    med_values = med_data[var].broadcast_like(mask)
+                    remapped_var = remapped_var.where(~mask, med_values)
+                else:
+                    # If dimensions don't match, just copy the original data
+                    remapped_var = med_data[var].copy()
+                
+                # Add the variable to the new dataset
+                remapped_data[var] = remapped_var
+
         return remapped_data
-    
+
+
     def change_spatial_resolution(self, data, spatial_resolution):
         regridded_data = data.coarsen(latitude=spatial_resolution, longitude=spatial_resolution, boundary="trim").mean()
         return regridded_data
@@ -255,11 +277,13 @@ if __name__ == "__main__":
     data_dirs = {'mediteranean': {'tp':"/home/egauillard/data/PR_era5_MED_1degr_19400101_20240229_new.nc",
                                   't2m':"/home/egauillard/data/T2M_era5_MED_1degr_19400101-20240229.nc"},
                  
-                 'north_hemisphere': {}}
+                 'north_hemisphere': {"stream": "/home/egauillard/data/STREAM250_era5_NHExt_1degr_19400101_20240229_new.nc",
+                                      "sst": "/home/egauillard/data/SST_era5_NHExt_1degr_19400101-20240229_new.nc"}
+                                      }
 
     wandb_config = {
     'dataset': {
-        'variables_nh': [],
+        'variables_nh': ["stream","sst"],
         'variables_med': ['tp', "t2m"],
         'target_variable': 'tp',
         'relevant_years': [2005,2011],
