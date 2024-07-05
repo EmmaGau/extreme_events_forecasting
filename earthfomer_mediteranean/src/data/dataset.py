@@ -69,15 +69,6 @@ class DatasetEra(Dataset):
         self.predict_sea_land= ds_conf["predict_sea_land"]
 
     def check_dataset(self, reference_dataset, new_dataset, variable_name):
-        """
-        Vérifie si le nouveau dataset a les mêmes coordonnées temps, latitude et longitude que le dataset de référence.
-        Si non, trouve l'intersection des coordonnées et ajuste les deux datasets.
-        
-        :param reference_dataset: Le dataset à utiliser comme référence
-        :param new_dataset: Le dataset à vérifier et potentiellement ajuster
-        :param variable_name: Le nom de la variable dans le nouveau dataset
-        :return: Tuple de (dataset de référence ajusté, nouveau dataset ajusté)
-        """
         if reference_dataset is None or len(reference_dataset.data_vars) == 0:
             return reference_dataset, new_dataset
 
@@ -200,7 +191,6 @@ class DatasetEra(Dataset):
 
         return remapped_data
 
-
     def change_spatial_resolution(self, data, spatial_resolution):
         regridded_data = data.coarsen(latitude=spatial_resolution, longitude=spatial_resolution, boundary="trim").mean()
         return regridded_data
@@ -269,6 +259,13 @@ class DatasetEra(Dataset):
         target_tensor = self._prepare_target(med_target_aggregated) # size (batch_size, height, width, channels)
         print("target_tensor", target_tensor.shape)
         print("input_tensor", input_tensor.shape)
+        # replace nan values by 0
+        input_tensor = torch.nan_to_num(input_tensor, nan=0.0)
+        target_tensor = torch.nan_to_num(target_tensor, nan=0.0)
+
+        print(input_tensor.shape)
+        print(target_tensor.shape)
+        
         return input_tensor, target_tensor
 
 
@@ -320,4 +317,7 @@ if __name__ == "__main__":
     dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
 
     sample = next(iter(dataloader))
+    
+
+    
 
