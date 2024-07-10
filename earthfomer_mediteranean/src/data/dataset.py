@@ -7,6 +7,8 @@ from utils.temporal_aggregator import TemporalAggregatorFactory
 from utils.scaler import DataScaler
 import wandb
 from utils.tools import AreaDataset
+from utils.enums import StackType, Resolution
+from utils.statistics import DataStatistics
 
 class DatasetEra(Dataset):
     def __init__(
@@ -14,6 +16,7 @@ class DatasetEra(Dataset):
         wandb_config : dict,
         data_dirs : str,
         temporal_aggr_factory : TemporalAggregatorFactory,
+        scaler: DataScaler 
     ):
         """The dataset takes a data_dir mediteranean and data dir North Hemisphere
             oppens the data dir and reads the data with xarray, only take the 
@@ -34,39 +37,84 @@ class DatasetEra(Dataset):
         self._initialize_config(wandb_config)
         self.data_dirs = data_dirs
         self.aggregator_factory = temporal_aggr_factory
+        self.scaler = scaler 
+        self.global_variables = self.variables_med + self.variables_nh
 
-        self.med_data, self.nh_data = self._load_and_prepare_data()
-        self.med_class = AreaDataset("mediteranean", self.med_data, self.spatial_resolution, self.relevant_years, self.relevant_months, self.variables_med, self.target)
-        self.med_aggregator = self.aggregator_factory.create_aggregator(self.med_class)
+        self.resolution_input = self.aggregator_factory.resolution_input
+        self.resolution_output = self.aggregator_factory.resolution_output
+        self.data, self.target = self._load_and_prepare_data()
+
+        self.aggregator = self.aggregator_factory.create_aggregator(self.data, self.target)
+
         
-        if self.nh_data is not None:
-            self.nh_class = AreaDataset("north_hemisphere", self.nh_data, self.spatial_resolution, self.relevant_years, self.relevant_months, self.variables_nh, self.target)
-            self.nh_aggregator = self.aggregator_factory.create_aggregator(self.nh_class)
-        else :
-            self.nh_aggregator = None
-
-        self.first_year = self.med_data.time.dt.year.min().item()
-        self.last_year = self.med_data.time.dt.year.max().item()
+        self.first_year = self.data.time.dt.year.min().item()
+        self.last_year = self.data.time.dt.year.max().item()
 
         self.land_sea_mask = self.get_binary_sea_mask()
+    
+    def _initialize_config(self, wandb_config):
+        """Initialize configuration settings."""
+        ds_conf = wandb_config["dataset"]
+        self.spatial_resolution = ds_conf["spatial_resolution"]
+        self.target_var = ds_conf["target_variable"]
+        self.variables_nh = ds_conf["variables_nh"]
+        self.variables_med = ds_conf["variables_med"]
+        self.mask_path = ds_conf["land_sea_mask"]
+        self.relevant_months = ds_conf["relevant_months"]
+        self.scaling_years = self.expand_year_range(ds_conf["scaling_years"])
+        self.relevant_years =  self.expand_year_range(ds_conf["relevant_years"])
+        self.predict_sea_land= ds_conf["predict_sea_land"]
 
+    def process_scaling(self, data_class: AreaDataset, time: int):        
+        resolution = self.get_scaling_resolution(time)
+        self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months, resolution)
+        self.statistics = self.stat_computer._get_stats(data_class)
+        
+        # Assign the appropriate time unit based on the resolution
+        time_unit = self.get_time_unit(resolution)
+        data_class.data = data_class.data.assign_coords({time_unit: getattr(data_class.data.time.dt, time_unit)})
+        
+        # Align statistics with the data based on the resolution
+        statistics = {
+            key: self.statistics[key].sel({f'{resolution.value}': data_class.data[time_unit]}) 
+            for key in self.statistics
+        }
+        
+        # Apply scaling
+        scaled_data = self.scaler.scale(data_class.data, statistics)
+        
+        return scaled_data
+
+    def get_scaling_resolution(self, time):
+        if 1 <= time <= 5:
+            return Resolution.DAILY
+        elif 5 < time <= 14:
+            return Resolution.WEEKLY
+        elif 14 < time <= 60:
+            return Resolution.MONTHLY
+        elif 60 < time <= 90:
+            return Resolution.SEASON
+        else:
+            raise ValueError("Resolution not supported")
+
+    def get_time_unit(self, resolution: Resolution):
+        if resolution == Resolution.DAILY:
+            return 'day'
+        elif resolution == Resolution.WEEKLY:
+            return 'week'
+        elif resolution == Resolution.MONTHLY:
+            return 'month'
+        elif resolution == Resolution.SEASON:
+            return 'season'
+        else:
+            raise ValueError(f"Unsupported resolution: {resolution}")
+            
+        
     def expand_year_range(self,year_range):
         if len(year_range) != 2:
             raise ValueError("Year range must be specified as [start_year, end_year]")
         start_year, end_year = year_range
         return list(range(start_year, end_year + 1))
-        
-    def _initialize_config(self, wandb_config):
-        """Initialize configuration settings."""
-        ds_conf = wandb_config["dataset"]
-        self.spatial_resolution = ds_conf["spatial_resolution"]
-        self.target = ds_conf["target_variable"]
-        self.variables_nh = ds_conf["variables_nh"]
-        self.variables_med = ds_conf["variables_med"]
-        self.mask_path = ds_conf["land_sea_mask"]
-        self.relevant_months = ds_conf["relevant_months"]
-        self.relevant_years =  self.expand_year_range(ds_conf["relevant_years"])
-        self.predict_sea_land= ds_conf["predict_sea_land"]
 
     def check_dataset(self, reference_dataset, new_dataset, variable_name):
         if reference_dataset is None or len(reference_dataset.data_vars) == 0:
@@ -122,6 +170,16 @@ class DatasetEra(Dataset):
         else:
             nh_data = None
 
+        self.med_class = AreaDataset("mediteranean", med_data, self.spatial_resolution, self.relevant_years, self.relevant_months, self.variables_med, self.target_var)
+        self.nh_class = AreaDataset("north_hemisphere", nh_data, self.spatial_resolution, self.relevant_years, self.relevant_months, self.variables_nh, self.target_var)
+        target_class = AreaDataset("target", med_data[[self.target_var]], self.spatial_resolution, self.relevant_years, self.relevant_months, [self.target_var], self.target_var)
+        
+        # scale med-data and nh_data 
+
+        med_data = self.process_scaling(self.med_class, self.resolution_input)
+        nh_data = self.process_scaling(self.nh_class, self.resolution_input)
+
+
         # change resolution if necessary
         if self.spatial_resolution !=1:
             med_data = self.change_spatial_resolution(med_data, self.spatial_resolution)
@@ -132,7 +190,13 @@ class DatasetEra(Dataset):
         if nh_data is not None:
             med_data = self.remap_MED_to_NH(nh_data, med_data)
             print("Data remapped")
-        return  med_data, nh_data
+        # merge the 2 datasets 
+        data = xr.merge([med_data, nh_data], compat='override', join='inner')
+
+        # target 
+        target = self.process_scaling(target_class, self.resolution_output)[self.target_var]
+
+        return  data, target
     
     def _load_data(self, dir_path):
         """Load data from a specified directory using xarray."""
@@ -202,11 +266,8 @@ class DatasetEra(Dataset):
         return data
     
     def __len__(self):
-        len_med = self.med_aggregator.compute_len_dataset()
-        if self.nh_data is not None:
-            len_nh = self.nh_aggregator.compute_len_dataset()
-            assert len_med == len_nh, "The length of the two datasets should be the same."
-        return len_med
+        len = self.aggregator.compute_len_dataset()
+        return len
     
     def _prepare_sea_land_target(self, target_data):
         sea_means = []
@@ -230,7 +291,6 @@ class DatasetEra(Dataset):
         return target_tensor
     
     def _prepare_target(self, target_data):
-        target_data = target_data[self.target]
         if self.predict_sea_land:
             target_tensor = self._prepare_sea_land_target(target_data)
         else: 
@@ -241,22 +301,17 @@ class DatasetEra(Dataset):
     def __getitem__(self, idx):
         input_list = []
         # Aggregate the input data
-        med_input_aggregated, med_target_aggregated, season_float, year_float = self.med_aggregator.aggregate(idx)
+        input_aggregated, target_aggregated, season_float, year_float = self.aggregator.aggregate(idx)
 
        # input data preparation
-        for var in self.variables_med:
-            input_list.append(med_input_aggregated[var].values)
-
-        if self.nh_data is not None:
-            nh_input_aggregated, nh_target_aggregated, _, _ = self.nh_aggregator.aggregate(idx)
-            for var in self.variables_nh:
-                input_list.append(nh_input_aggregated[var].values)
+        for var in self.global_variables:
+            input_list.append(input_aggregated[var].values)
             
         input_data_np = np.transpose(np.array(input_list), (1,2,3,0))
         input_tensor = torch.tensor(input_data_np)  # size (batch_size, height, width, channels)
 
         # target preparation
-        target_tensor = self._prepare_target(med_target_aggregated) # size (batch_size, height, width, channels)
+        target_tensor = self._prepare_target(target_aggregated) # size (batch_size, height, width, channels)
         print("target_tensor", target_tensor.shape)
         print("input_tensor", input_tensor.shape)
         # replace nan values by 0
@@ -285,6 +340,7 @@ if __name__ == "__main__":
         'target_variable': 'tp',
         'relevant_years': [2005,2011],
         'relevant_months': [10,11,12,1,2,3],
+        'scaling_years': [2005,2011],
         'land_sea_mask': '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc',
         'spatial_resolution': 1,
         'predict_sea_land': False,
@@ -297,8 +353,6 @@ if __name__ == "__main__":
         'lead_time_number': 3,
         'resolution_input': 7,
         'resolution_output': 7,
-        'scaling_years': [2005,2011],
-        'scaling_months': [10,11,12,1,2,3], 
         'gap': 1,
     }
 }
@@ -308,10 +362,10 @@ if __name__ == "__main__":
 
     # Initialize dataset and dataloaders
     scaler = DataScaler(wandb_config['scaler'])
-    temp_aggregator_factory = TemporalAggregatorFactory(wandb_config['temporal_aggregator'], scaler)
+    temp_aggregator_factory = TemporalAggregatorFactory(wandb_config['temporal_aggregator'])
     
 
-    train_dataset = DatasetEra(wandb_config, data_dirs, temp_aggregator_factory)
+    train_dataset = DatasetEra(wandb_config, data_dirs, temp_aggregator_factory, scaler)
     print("len dataset", train_dataset.__len__())
 
     dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)

@@ -15,11 +15,12 @@ data:
         sst: "/home/egauillard/data/SST_era5_NHExt_1degr_19400101-20240229_new.nc"
         stream: "/home/egauillard/data/STREAM500_era5_NHExt_1degr_19400101_20240229_new.nc"
   dataset:
-    variables_nh: ["msl", "sst", "stream"]
+    variables_nh: ["sst", "stream"]
     variables_med: ['tp', 't2m']
     target_variable: 'tp'
     relevant_years: [1940, 1990]
     relevant_months: [10, 11, 12, 1, 2, 3]
+    scaling_years: [1940, 1990]
     land_sea_mask: '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc'
     spatial_resolution: 1
     predict_sea_land: false 
@@ -30,14 +31,12 @@ data:
     lead_time_number: 3
     resolution_input: 7
     resolution_output: 7
-    scaling_years: [1940, 1990]
-    scaling_months: [10, 11, 12, 1, 2, 3]
     gap: 1
 
 model:
-  data_channels: 5
-  input_shape: [3, 111, 360, 5]
-  target_shape: [3, 111, 360, 1]
+  data_channels: 4
+  input_shape: [3, 111, 360, 4]
+  target_shape: [3, 15, 50, 1]
   base_units: 64
   block_units: null
   scale_alpha: 1.0
