@@ -3182,12 +3182,15 @@ class CuboidTransformerModel(nn.Module):
         else:
             dec_out = self.decoder(initial_z, mem_l)
         
-        # Interpolation to target shape
-        dec_out = F.interpolate(dec_out.permute(0, 4, 1, 2, 3), 
-                                size=(T_out, H_out, W_out), 
-                                mode='trilinear', 
-                                align_corners=False).permute(0, 2, 3, 4, 1)
+        print("decoder", dec_out.shape)
+        
+        # # Interpolation to target shape
+        # dec_out = F.interpolate(dec_out.permute(0, 4, 1, 2, 3), 
+        #                         size=(T_out, H_out, W_out), 
+        #                         mode='trilinear', 
+        #                         align_corners=False).permute(0, 2, 3, 4, 1)
 
         dec_out = self.final_decoder(dec_out)
+        print("final decoder", dec_out.shape)
         out = self.dec_final_proj(dec_out)
         return out

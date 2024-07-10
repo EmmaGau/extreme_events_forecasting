@@ -22,6 +22,7 @@ from earthformer.utils.utils import get_parameter_names
 from model.cuboid_transformer import CuboidTransformerModel
 from earthformer.datasets.enso.enso_dataloader import ENSOLightningDataModule, NINO_WINDOW_T
 from copy import deepcopy
+import wandb
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
@@ -36,8 +37,8 @@ exps_dir = os.path.join(_curr_dir, "experiments")
 pretrained_checkpoints_dir = cfg.pretrained_checkpoints_dir
 pytorch_state_dict_name = "earthformer_icarenso2021.pt"
 
-VAL_YEARS = [1990, 2009]
-TEST_YEARS = [2009, 2024]
+VAL_YEARS = [1991, 2009]
+TEST_YEARS = [2010, 2024]
 class CuboidERAModule(pl.LightningModule):
 
     def __init__(self,

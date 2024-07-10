@@ -22,7 +22,7 @@ from utils.tools import AreaDataset
 MAPPING_SEASON= {"DJF": 0, "MAM": 1, "JJA": 2, "SON": 3}
 
 class TemporalAggregator:
-    def __init__(self, dataset: xr.Dataset, target: xr.Dataset,  stack_number_input : int,lead_time_number : int, resolution_input : int, resolution_output: int, gap : int =0):
+    def __init__(self, dataset: xr.Dataset, target: xr.Dataset,  stack_number_input : int,lead_time_number : int, resolution_input : int, resolution_output: int, gap : int =1):
         self.name = "TemporalAggregator"
         # dataset parameters 
         self.dataset = dataset
