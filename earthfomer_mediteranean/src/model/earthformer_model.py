@@ -19,7 +19,7 @@ from einops import rearrange
 from earthformer.config import cfg
 from earthformer.utils.optim import SequentialLR, warmup_lambda
 from earthformer.utils.utils import get_parameter_names
-from earthformer.cuboid_transformer.cuboid_transformer import CuboidTransformerModel
+from model.cuboid_transformer import CuboidTransformerModel
 from earthformer.datasets.enso.enso_dataloader import ENSOLightningDataModule, NINO_WINDOW_T
 from copy import deepcopy
 from pytorch_lightning.loggers import WandbLogger
@@ -277,10 +277,10 @@ class CuboidERAModule(pl.LightningModule):
         data_dirs = dataset_cfg['data_dirs']
         
         scaler = DataScaler(dataset_cfg['scaler'])
-        temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'], scaler)
-        train_dataset = DatasetEra(train_config, data_dirs, temp_aggregator_factory)
-        val_dataset = DatasetEra(val_config, data_dirs, temp_aggregator_factory)
-        test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory)
+        temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'])
+        train_dataset = DatasetEra(train_config, data_dirs, temp_aggregator_factory, scaler)
+        val_dataset = DatasetEra(val_config, data_dirs, temp_aggregator_factory, scaler)
+        test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory, scaler)
         print("len train_dataset", len(train_dataset))
         print("len val_dataset", len(val_dataset))
         print("len test_dataset", len(test_dataset))
@@ -421,7 +421,7 @@ def main():
     args = parser.parse_args()
 
     if args.cfg is None:
-        args.cfg = "configs/earthformer_default.yaml"
+        args.cfg = "/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/configs/earthformer_default.yaml"
     
     oc_from_file = OmegaConf.load(open(args.cfg, "r"))
     dataset_cfg = OmegaConf.to_object(oc_from_file.data)
