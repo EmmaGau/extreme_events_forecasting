@@ -15,7 +15,7 @@ data:
         sst: "/home/egauillard/data/SST_era5_NHExt_1degr_19400101-20240229_new.nc"
         stream: "/home/egauillard/data/STREAM500_era5_NHExt_1degr_19400101_20240229_new.nc"
   dataset:
-    variables_nh: ["stream", "msl"]
+    variables_nh: ["sst", "stream", "msl"]
     variables_med: ['tp', 't2m']
     target_variable: 'tp'
     relevant_years: [1940, 1990]
@@ -36,7 +36,7 @@ data:
 model:
   data_channels: 4
   input_shape: [3, 111, 360, 4]
-  target_shape: [3, 15, 50, 1]
+  target_shape: [3, 15, 50, 2]
   base_units: 64
   block_units: null
   scale_alpha: 1.0
@@ -60,9 +60,9 @@ model:
   cross_self_pattern: "axial"
   cross_pattern: "cross_1x1"
   dec_cross_last_n_frames: null
-  attn_drop: 0.1
-  proj_drop: 0.1
-  ffn_drop: 0.1
+  attn_drop: 0.2
+  proj_drop: 0.2
+  ffn_drop: 0.2
   num_heads: 4
   ffn_activation: "gelu"
   gated_ffn: false
@@ -104,7 +104,7 @@ optim:
   save_top_k: 1
 
 logging:
-  logging_prefix: "earthformer"
+  logging_prefix: "earthformer_gamma"
   monitor_lr: true
   monitor_device: false
   track_grad_norm: -1

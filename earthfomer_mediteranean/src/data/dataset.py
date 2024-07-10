@@ -11,6 +11,7 @@ from utils.enums import StackType, Resolution
 from utils.statistics import DataStatistics
 
 class DatasetEra(Dataset):
+    # TODO in statistics add if target is "pr" then do sum else do mean
     def __init__(
         self,
         wandb_config : dict,
@@ -330,17 +331,18 @@ if __name__ == "__main__":
                                   't2m':"/home/egauillard/data/T2M_era5_MED_1degr_19400101-20240229.nc"},
                  
                  'north_hemisphere': {"stream": "/home/egauillard/data/STREAM250_era5_NHExt_1degr_19400101_20240229_new.nc",
-                                      "sst": "/home/egauillard/data/SST_era5_NHExt_1degr_19400101-20240229_new.nc"}
-                                      }
+                                      "sst": "/home/egauillard/data/SST_era5_NHExt_1degr_19400101-20240229_new.nc",
+                                      "msl": "/home/egauillard/data/MSLP_era5_NHExt_1degr_19400101_20240229_new.nc",
+                                      }}
 
     wandb_config = {
     'dataset': {
-        'variables_nh': ["stream","sst"],
+        'variables_nh': ["stream","sst", "msl"],
         'variables_med': ['tp', "t2m"],
         'target_variable': 'tp',
-        'relevant_years': [2005,2011],
+        'relevant_years': [1940,1990],
         'relevant_months': [10,11,12,1,2,3],
-        'scaling_years': [2005,2011],
+        'scaling_years': [1940,1990],
         'land_sea_mask': '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc',
         'spatial_resolution': 1,
         'predict_sea_land': False,
