@@ -10,6 +10,8 @@ extreme_events_env
 experiments
 *.err
 *.out
+*.png
+results
 
 
 lightning_logs
