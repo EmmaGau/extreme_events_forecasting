@@ -2797,6 +2797,7 @@ class CuboidTransformerModel(nn.Module):
     def __init__(self,
                  input_shape,
                  target_shape,
+                 gamma=False,
                  base_units=128,
                  block_units=None,
                  scale_alpha=1.0,
@@ -2890,6 +2891,8 @@ class CuboidTransformerModel(nn.Module):
         self.conv_init_mode = conv_init_mode
         self.down_up_linear_init_mode = down_up_linear_init_mode
         self.norm_init_mode = norm_init_mode
+
+        self.gamma = gamma
 
         assert len(enc_depth) == len(dec_depth)
         self.base_units = base_units
@@ -3184,13 +3187,23 @@ class CuboidTransformerModel(nn.Module):
         
         print("decoder", dec_out.shape)
         
-        # # Interpolation to target shape
-        # dec_out = F.interpolate(dec_out.permute(0, 4, 1, 2, 3), 
-        #                         size=(T_out, H_out, W_out), 
-        #                         mode='trilinear', 
-        #                         align_corners=False).permute(0, 2, 3, 4, 1)
 
         dec_out = self.final_decoder(dec_out)
         print("final decoder", dec_out.shape)
         out = self.dec_final_proj(dec_out)
+        print(self.gamma)
+        eps = 1e-6
+        if self.gamma == True:
+            print("Avant exp - min:", out[..., 0:1].min().item(), "max:", out[..., 0:1].max().item())
+            print("Avant exp - min:", out[..., 1:2].min().item(), "max:", out[..., 1:2].max().item())
+            
+            alpha = torch.exp(out[..., 0:1])
+            beta = torch.exp(out[..., 1:2])
+            
+            print("Après exp - alpha min:", alpha.min().item(), "max:", alpha.max().item())
+            print("Après exp - beta min:", beta.min().item(), "max:", beta.max().item())
+            out = torch.cat([alpha, beta], dim=-1)
+            # printle min et le max de out
+            print(" min", out.min().item(), "max:", out.max().item())
+            
         return out
