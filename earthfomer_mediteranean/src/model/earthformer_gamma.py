@@ -19,7 +19,7 @@ from einops import rearrange
 from earthformer.config import cfg
 from earthformer.utils.optim import SequentialLR, warmup_lambda
 from earthformer.utils.utils import get_parameter_names
-from earthformer.cuboid_transformer.cuboid_transformer import CuboidTransformerModel
+from model.cuboid_transformer import CuboidTransformerModel
 from copy import deepcopy
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -51,6 +51,7 @@ class CuboidERAModule(pl.LightningModule):
         num_blocks = len(model_cfg["enc_depth"])
         
         self.torch_nn_module = CuboidTransformerModel(
+            gamma = model_cfg["gamma"],
             input_shape=model_cfg["input_shape"],
             target_shape=model_cfg["target_shape"],
             base_units=model_cfg["base_units"],
@@ -242,10 +243,6 @@ class CuboidERAModule(pl.LightningModule):
         ret.update(kwargs)
         return ret
     
-    def gamma_negative_log_likelihood(alpha, beta, y):
-        return -((alpha - 1) * torch.log(y) - y * beta - alpha * torch.log(beta) + torch.lgamma(alpha))
-
-
     @classmethod
     def get_total_num_steps(
             cls,
@@ -279,10 +276,10 @@ class CuboidERAModule(pl.LightningModule):
         data_dirs = dataset_cfg['data_dirs']
         
         scaler = DataScaler(dataset_cfg['scaler'])
-        temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'], scaler)
-        train_dataset = DatasetEra(train_config, data_dirs, temp_aggregator_factory)
-        val_dataset = DatasetEra(val_config, data_dirs, temp_aggregator_factory)
-        test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory)
+        temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'])
+        train_dataset = DatasetEra(train_config, data_dirs, temp_aggregator_factory, scaler)
+        val_dataset = DatasetEra(val_config, data_dirs, temp_aggregator_factory, scaler)
+        test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory, scaler)
         print("len train_dataset", len(train_dataset))
         print("len val_dataset", len(val_dataset))
         print("len test_dataset", len(test_dataset))
@@ -293,11 +290,15 @@ class CuboidERAModule(pl.LightningModule):
         
         return train_dataloader, val_dataloader, test_dataloader
 
+    
+
     def forward(self, batch):
         input, target = batch
         input = input.float() # (N, in_len, lat, lon, 1)
         target = target.float()# (N, in_len, lat, lon, 1)
-        alpha, beta = self.torch_nn_module(input)
+        print('torch_shape',self.torch_nn_module(input).shape)
+        output = self.torch_nn_module(input)
+        alpha, beta = output[..., 0].unsqueeze(-1), output[..., 1].unsqueeze(-1)
         loss = - dist.Gamma(alpha, beta).log_prob(target).mean()
         return alpha, beta, loss, input, target
 
@@ -348,6 +349,8 @@ class CuboidERAModule(pl.LightningModule):
         micro_batch_size = batch[0].shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
         if not self.eval_example_only or data_idx in self.val_example_data_idx_list:
+            print('batch', batch)
+            print("validation step")
             alpha, beta, loss, input, target = self(batch)
             
             # Calculate CRPS for Gamma distribution
@@ -430,7 +433,7 @@ class CuboidERAModule(pl.LightningModule):
 
 def default_save_name():
     now = time.strftime("%Y%m%d_%H%M%S")
-    return f"earthformer_era_{now}"
+    return f"earthformer_gamma_era_{now}"
 
 def get_parser():
     parser = argparse.ArgumentParser()
@@ -449,7 +452,7 @@ def main():
     args = parser.parse_args()
 
     if args.cfg is None:
-        args.cfg = "configs/earthformer_default.yaml"
+        args.cfg = "configs/earthformer_gamma_default.yaml"
     
     oc_from_file = OmegaConf.load(open(args.cfg, "r"))
     dataset_cfg = OmegaConf.to_object(oc_from_file.data)

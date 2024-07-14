@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=earthformer_training
+#SBATCH --job-name=gamma_earthformer_training
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
@@ -8,11 +8,9 @@
 #SBATCH --time=05:00:00
 #SBATCH --mem-per-cpu=9000
 
-#SBATCH --output=earthfomer_mediteranean/src/outputs/output-%j.out
-#SBATCH --error=earthfomer_mediteranean/src/outputs/error-%j.err
+#SBATCH --output=earthfomer_mediteranean/outputs_gamma/output-%j.out
+#SBATCH --error=earthfomer_mediteranean/outputs_gamma/error-%j.err
 
-#SBATCH --mail-type=BEGIN,END
-#SBATCH --mail-user=e.gauillard@vu.nl
 
 #!/bin/bash
 
