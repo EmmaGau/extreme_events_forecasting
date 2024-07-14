@@ -11,9 +11,6 @@
 #SBATCH --output=earthfomer_mediteranean/src/outputs/output-%j.out
 #SBATCH --error=earthfomer_mediteranean/src/outputs/error-%j.err
 
-#SBATCH --mail-type=BEGIN,END
-#SBATCH --mail-user=e.gauillard@vu.nl
-
 #!/bin/bash
 
 # Chemins absolus

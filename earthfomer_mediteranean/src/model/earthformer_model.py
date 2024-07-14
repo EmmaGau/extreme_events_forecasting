@@ -51,6 +51,7 @@ class CuboidERAModule(pl.LightningModule):
         num_blocks = len(model_cfg["enc_depth"])
         
         self.torch_nn_module = CuboidTransformerModel(
+            gamma = model_cfg["gamma"],
             input_shape=model_cfg["input_shape"],
             target_shape=model_cfg["target_shape"],
             base_units=model_cfg["base_units"],
@@ -456,7 +457,7 @@ def main():
     trainer.fit(model=pl_module, train_dataloaders=train_dl, val_dataloaders=val_dl)
     # state_dict = pl_ckpt_to_pytorch_state_dict(checkpoint_path=trainer.checkpoint_callback.best_model_path,
     #                                             map_location=torch.device("cpu"),
-    #                                             delete_prefix_len=len("torch_nn_module."))
+    #                                              delete_prefix_len=len("torch_nn_module."))
     # torch.save(state_dict, os.path.join(pl_module.save_dir, "checkpoints", pytorch_state_dict_name))
 
 if __name__ == "__main__":

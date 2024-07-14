@@ -15,7 +15,7 @@ data:
         sst: "/home/egauillard/data/SST_era5_NHExt_1degr_19400101-20240229_new.nc"
         stream: "/home/egauillard/data/STREAM500_era5_NHExt_1degr_19400101_20240229_new.nc"
   dataset:
-    variables_nh: ["sst", "stream", "msl"]
+    variables_nh: ["sst", "stream"]
     variables_med: ['tp', 't2m']
     target_variable: 'tp'
     relevant_years: [1940, 1990]
@@ -34,6 +34,7 @@ data:
     gap: 1
 
 model:
+  gamma: True
   data_channels: 4
   input_shape: [3, 111, 360, 4]
   target_shape: [3, 15, 50, 2]
