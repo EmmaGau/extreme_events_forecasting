@@ -1,8 +1,4 @@
 layout:
-  in_len: 12
-  out_len: 14
-  img_height: 24
-  img_width: 48
   layout: "NTHWC"
 
 data:
@@ -16,7 +12,7 @@ data:
         stream: "/home/egauillard/data/STREAM500_era5_NHExt_1degr_19400101_20240229_new.nc"
         ttr: "/home/egauillard/data/OLR_era5_tropics_1degr_19400101_20240229.nc"
   dataset:
-    variables_nh: ["stream", "sst"]
+    variables_nh: ["stream", "sst", "msl"]
     variables_med: ['tp', 't2m']
     target_variable: 'tp'
     relevant_years: [1940, 1990]
@@ -25,20 +21,19 @@ data:
     land_sea_mask: '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc'
     spatial_resolution: 1
     predict_sea_land: false 
+    out_spatial_resolution : 1
+    scale_target: false
   scaler:
     mode: 'standardize'
   temporal_aggregator:
-    stack_number_input: 3
-    lead_time_number: 3
+    in_len: 3
+    out_len: 3
     resolution_input: 7
     resolution_output: 7
     gap: 1
 
 model:
   gamma: False
-  data_channels: 4
-  input_shape: [3, 111, 360, 4]
-  target_shape: [3, 15, 50, 1]
   base_units: 64
   block_units: null
   scale_alpha: 1.0
@@ -89,13 +84,13 @@ model:
 
 optim:
   seed: null
-  total_batch_size: 32
+  total_batch_size: 64
   micro_batch_size: 8
   method: "adamw"
   lr: 0.001
   wd: 0.00001
   gradient_clip_val: 1.0
-  max_epochs: 200
+  max_epochs: 100
   warmup_percentage: 0.2
   lr_scheduler_mode: "cosine"
   min_lr_ratio: 0.1

@@ -44,16 +44,21 @@ class CuboidERAModule(pl.LightningModule):
     def __init__(self,
                  total_num_steps: int,
                  config_file_path: str = "config.yaml",
-                 save_dir: str = None):
+                 save_dir: str = None,
+                 input_shape: Sequence[int] = None,
+                 output_shape: Sequence[int]= None,):
         super(CuboidERAModule, self).__init__()
         oc = OmegaConf.load(open(config_file_path))
         model_cfg = OmegaConf.to_object(oc.model)
         num_blocks = len(model_cfg["enc_depth"])
+        input_shape = input_shape if input_shape is not None else model_cfg["input_shape"]
+        output_shape = output_shape if output_shape is not None else model_cfg["target_shape"]
+
         
         self.torch_nn_module = CuboidTransformerModel(
             gamma = model_cfg["gamma"],
-            input_shape=model_cfg["input_shape"],
-            target_shape=model_cfg["target_shape"],
+            input_shape= input_shape,
+            target_shape= output_shape,
             base_units=model_cfg["base_units"],
             block_units=model_cfg["block_units"],
             scale_alpha=model_cfg["scale_alpha"],
@@ -107,12 +112,10 @@ class CuboidERAModule(pl.LightningModule):
         self.save_hyperparameters(oc)
         self.oc = oc
         self.dataset_config = oc.data
-        self.in_len = oc.layout.in_len
-        self.out_len = oc.layout.out_len
         self.layout = oc.layout.layout
         self.channel_axis = self.layout.find("C")
         self.batch_axis = self.layout.find("N")
-        self.channels = model_cfg["data_channels"]
+        self.channels = input_shape[self.channel_axis]
         self.max_epochs = oc.optim.max_epochs
         self.optim_method = oc.optim.method
         self.lr = oc.optim.lr
@@ -435,6 +438,9 @@ def main():
     seed_everything(seed, workers=True)
 
     train_dl, val_dl, test_dl = CuboidERAModule.get_dataloaders(dataset_cfg, total_batch_size, micro_batch_size, VAL_YEARS, TEST_YEARS)
+    sample = next(iter(train_dl))
+    input_shape = sample[0].shape
+    output_shape = sample[1].shape
 
     accumulate_grad_batches = total_batch_size // (micro_batch_size * args.gpus)
 
@@ -446,7 +452,9 @@ def main():
     pl_module = CuboidERAModule(
         total_num_steps=total_num_steps,
         save_dir=args.save,
-        config_file_path=args.cfg,)
+        config_file_path=args.cfg,
+        input_shape = input_shape,
+        output_shape = output_shape)
     
     trainer_kwargs = pl_module.set_trainer_kwargs(
         devices=args.gpus,
@@ -455,10 +463,6 @@ def main():
     trainer = Trainer(**trainer_kwargs)
 
     trainer.fit(model=pl_module, train_dataloaders=train_dl, val_dataloaders=val_dl)
-    # state_dict = pl_ckpt_to_pytorch_state_dict(checkpoint_path=trainer.checkpoint_callback.best_model_path,
-    #                                             map_location=torch.device("cpu"),
-    #                                              delete_prefix_len=len("torch_nn_module."))
-    # torch.save(state_dict, os.path.join(pl_module.save_dir, "checkpoints", pytorch_state_dict_name))
 
 if __name__ == "__main__":
     main()
