@@ -11,6 +11,7 @@ from data.dataset import DatasetEra
 from utils.scaler import DataScaler
 from utils.temporal_aggregator import TemporalAggregatorFactory
 import pandas as pd
+import argparse 
 
 def load_model(checkpoint_path, config_path):
     # Load configuration
@@ -104,13 +105,48 @@ def inference_and_plot(model, test_dataloader, save_folder, scaler):
         plt.tight_layout()
         plt.savefig(os.path.join(save_folder, f'comparison_plot_{i}.png'))
         plt.close()
+    
+def get_cfg_file_from_chkpt(chkpt_path):
+    # Get the directory containing the checkpoint file
+    chkpt_dir = os.path.dirname(chkpt_path)
+    
+    # Go up one level to the experiment directory
+    exp_dir = os.path.dirname(chkpt_dir)
+    
+    # Check for 'cfg.yaml' first
+    cfg_path = os.path.join(exp_dir, 'cfg.yaml')
+    if os.path.exists(cfg_path):
+        return cfg_path
+    
+    raise FileNotFoundError(f"No cfg.yaml or config.yaml found in {exp_dir}")
+
+def create_save_folder(chkpt_path):
+    # Get the directory containing the checkpoint file
+    chkpt_dir = os.path.dirname(chkpt_path)
+    
+    # Go up one level to the experiment directory
+    exp_dir = os.path.dirname(chkpt_dir)
+    
+    # Create a folder for saving plots
+    save_folder = os.path.join(exp_dir, 'inference_plots')
+    os.makedirs(save_folder, exist_ok=True)
+    
+    return save_folder
+    
 
 if __name__ == "__main__":
-    # Paths
-    checkpoint_path = "/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240710_165244/checkpoints/model-epoch=024.ckpt"
-    config_path = "/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240710_165244/cfg.yaml"
-    save_folder = "results"
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--checkpoint_path', type=str, required=True)
+    args = parser.parse_args()
 
+    checkpoint_path = args.checkpoint_path
+
+    # Get the configuration file
+    config_path = get_cfg_file_from_chkpt(checkpoint_path)
+
+    # Create a folder for saving plots
+    save_folder = create_save_folder(checkpoint_path)
+                                     
     # Load model and configuration
     model, oc = load_model(checkpoint_path, config_path)
 
