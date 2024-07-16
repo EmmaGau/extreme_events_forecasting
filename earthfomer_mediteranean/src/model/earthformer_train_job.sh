@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --gpus=1
 #SBATCH --gpus-per-node=1
-#SBATCH --time=05:00:00
+#SBATCH --time=24:00:00
 #SBATCH --mem-per-cpu=9000
 
 #SBATCH --output=earthfomer_mediteranean/src/outputs/output-%j.out

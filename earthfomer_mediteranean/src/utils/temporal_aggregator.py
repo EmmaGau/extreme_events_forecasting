@@ -22,15 +22,15 @@ from utils.tools import AreaDataset
 MAPPING_SEASON= {"DJF": 0, "MAM": 1, "JJA": 2, "SON": 3}
 
 class TemporalAggregator:
-    def __init__(self, dataset: xr.Dataset, target: xr.Dataset,  stack_number_input : int,lead_time_number : int, resolution_input : int, resolution_output: int, gap : int =1):
+    def __init__(self, dataset: xr.Dataset, target: xr.Dataset,  in_len : int,out_len : int, resolution_input : int, resolution_output: int, gap : int =1):
         self.name = "TemporalAggregator"
         # dataset parameters 
         self.dataset = dataset
         self.target = target
 
         # aggregation parameters
-        self.stack_number_input = stack_number_input
-        self.lead_time_number = lead_time_number
+        self.in_len = in_len
+        self.out_len = out_len
         self.resolution_input = resolution_input
         self.resolution_output = resolution_output
         self.gap = gap
@@ -51,9 +51,11 @@ class TemporalAggregator:
         return grouped_data
     
     def _compute_number_samples_in_season(self, wet_season_data: xr.DataArray):
-        width_input = self.stack_number_input*self.resolution_input
-        width_output = self.lead_time_number*self.resolution_output
-        return len(wet_season_data.time.values)//(width_input + width_output)
+        width_input = self.in_len*self.resolution_input
+        width_output = self.out_len*self.resolution_output
+        total_width = width_input + width_output
+        total_lenght = len(wet_season_data.time.values)
+        return ((total_lenght - total_width)//self.gap) +1
     
     def compute_len_dataset(self):
         length = 0
@@ -67,8 +69,8 @@ class TemporalAggregator:
         wet_season = self.wet_season_data[self.current_wet_season_year]
         wet_season_target = self.wet_season_target[self.current_wet_season_year]
 
-        width_input = self.stack_number_input * self.resolution_input
-        width_output = self.lead_time_number * self.resolution_output
+        width_input = self.in_len * self.resolution_input
+        width_output = self.out_len * self.resolution_output
 
         if self._current_temporal_idx + width_input + width_output >= len(wet_season.time.values):
             self.current_wet_season_year += 1
@@ -89,15 +91,15 @@ class TemporalAggregator:
 
         # compute the indexes of interest for the target wet_season
         start_idx_output = self._current_temporal_idx + width_input
-        target_time_indexes = wet_season_target.time.values[start_idx_output:start_idx_output + self.resolution_output * self.lead_time_number]
+        target_time_indexes = wet_season_target.time.values[start_idx_output:start_idx_output + self.resolution_output * self.out_len]
         output_window = wet_season_target.sel(time=target_time_indexes)
 
         # stack mean for 
-        for i in range(self.stack_number_input):
+        for i in range(self.in_len):
             mean_input = input_window.sel(time=input_time_indexes[i * self.resolution_input:(i + 1) * self.resolution_input]).mean(dim="time")
             input_data.append(mean_input)
 
-        for i in range(self.lead_time_number):
+        for i in range(self.out_len):
             mean_output = output_window.sel(time=target_time_indexes[i * self.resolution_output:(i + 1) * self.resolution_output]).mean(dim="time")
             target_data.append(mean_output)
 
@@ -112,8 +114,8 @@ class TemporalAggregator:
     
 class TemporalAggregatorFactory:
     def __init__(self, config):
-        self.stack_number_input = config['stack_number_input']
-        self.lead_time_number = config['lead_time_number']
+        self.in_len = config['in_len']
+        self.out_len = config['out_len']
         self.resolution_input = config['resolution_input']
         self.resolution_output = config['resolution_output']
         self.gap = config['gap']
@@ -123,8 +125,8 @@ class TemporalAggregatorFactory:
         return TemporalAggregator(
             dataset=dataset,
             target = target,
-            stack_number_input=self.stack_number_input,
-            lead_time_number=self.lead_time_number,
+            in_len=self.in_len,
+            out_len=self.out_len,
             resolution_input=self.resolution_input,
             resolution_output=self.resolution_output,
             gap = self.gap

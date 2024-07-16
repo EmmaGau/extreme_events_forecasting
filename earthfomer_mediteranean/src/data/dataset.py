@@ -17,7 +17,7 @@ class DatasetEra(Dataset):
         wandb_config : dict,
         data_dirs : str,
         temporal_aggr_factory : TemporalAggregatorFactory,
-        scaler: DataScaler 
+        scaler: DataScaler,
     ):
         """The dataset takes a data_dir mediteranean and data dir North Hemisphere
             oppens the data dir and reads the data with xarray, only take the 
@@ -65,6 +65,8 @@ class DatasetEra(Dataset):
         self.scaling_years = self.expand_year_range(ds_conf["scaling_years"])
         self.relevant_years =  self.expand_year_range(ds_conf["relevant_years"])
         self.predict_sea_land= ds_conf["predict_sea_land"]
+        self.out_spatial_resolution = ds_conf.get("out_spatial_resolution", 1.0)  # Default to 1.0 if not specified
+        self.scale_target = ds_conf.get("scale_target", True)
 
     def process_scaling(self, data_class: AreaDataset, time: int):        
         resolution = self.get_scaling_resolution(time)
@@ -152,6 +154,7 @@ class DatasetEra(Dataset):
         med_datasets = []
         nh_datasets = []
 
+        # first check that dataset are aligned temporaly and spatially, and merge datasets
         for var in self.variables_med:
             med_data = self._load_data(self.data_dirs['mediteranean'][var])
             if med_datasets:
@@ -171,21 +174,26 @@ class DatasetEra(Dataset):
         else:
             nh_data = None
 
+        # create class for each dataset to gather the information
         self.med_class = AreaDataset("mediteranean", med_data, self.spatial_resolution, self.relevant_years, self.relevant_months, self.variables_med, self.target_var)
         self.nh_class = AreaDataset("north_hemisphere", nh_data, self.spatial_resolution, self.relevant_years, self.relevant_months, self.variables_nh, self.target_var)
-        target_class = AreaDataset("target", med_data[[self.target_var]], self.spatial_resolution, self.relevant_years, self.relevant_months, [self.target_var], self.target_var)
-        
-        # scale med-data and nh_data 
-
-        med_data = self.process_scaling(self.med_class, self.resolution_input)
-        nh_data = self.process_scaling(self.nh_class, self.resolution_input)
-
+        self.target_class = AreaDataset("target", med_data[[self.target_var]], self.out_spatial_resolution, self.relevant_years, self.relevant_months, [self.target_var], self.target_var)
 
         # change resolution if necessary
         if self.spatial_resolution !=1:
-            med_data = self.change_spatial_resolution(med_data, self.spatial_resolution)
-            nh_data = self.change_spatial_resolution(nh_data, self.spatial_resolution)
-        
+            self.med_class.data = self.change_spatial_resolution(self.med_class.data, self.spatial_resolution)
+            self.nh_class.data = self.change_spatial_resolution(self.nh_class.data, self.spatial_resolution)
+        if self.out_spatial_resolution !=1:
+            self.target_class.data = self.change_spatial_resolution(self.target_class.data, self.out_spatial_resolution)
+
+        # scale data after regridding
+        med_data = self.process_scaling(self.med_class, self.resolution_input)
+        nh_data = self.process_scaling(self.nh_class, self.resolution_input)
+        if self.scale_target:
+            target = self.process_scaling(self.target_class, self.resolution_output)[self.target_var]
+        else:
+            target = self.target_class.data[self.target_var]
+
         print("Data loaded")
         # Remap Mediterranean to North Hemisphere if necessary
         if nh_data is not None:
@@ -193,9 +201,6 @@ class DatasetEra(Dataset):
             print("Data remapped")
         # merge the 2 datasets 
         data = xr.merge([med_data, nh_data], compat='override', join='inner')
-
-        # target 
-        target = self.process_scaling(target_class, self.resolution_output)[self.target_var]
 
         return  data, target
     
@@ -340,19 +345,22 @@ if __name__ == "__main__":
         'variables_nh': ["stream","sst", "msl"],
         'variables_med': ['tp', "t2m"],
         'target_variable': 'tp',
-        'relevant_years': [1940,1990],
+        'relevant_years': [2000,2005],
         'relevant_months': [10,11,12,1,2,3],
-        'scaling_years': [1940,1990],
+        'scaling_years': [2000,2005],
         'land_sea_mask': '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc',
         'spatial_resolution': 1,
         'predict_sea_land': False,
+        'out_spatial_resolution': 10,
+        'scale_target': False,
+        
     },
     'scaler': {
         'mode': 'standardize'
     },
     'temporal_aggregator': {
-        'stack_number_input': 3,
-        'lead_time_number': 3,
+        'in_len': 3,
+        'out_len': 3,
         'resolution_input': 7,
         'resolution_output': 7,
         'gap': 1,
