@@ -68,6 +68,22 @@ class DatasetEra(Dataset):
         self.out_spatial_resolution = ds_conf.get("out_spatial_resolution", 1.0)  # Default to 1.0 if not specified
         self.scale_target = ds_conf.get("scale_target", True)
 
+    def select_months_and_resample(self, data, resolution):
+        # Sélectionner les mois d'intérêt
+        data = data.sel(time=data.time.dt.month.isin(self.relevant_months))
+        
+        # Appliquer la moyenne mobile selon la résolution
+        if resolution == Resolution.DAILY:
+            return data  # Pas de changement pour la résolution journalière
+        elif resolution == Resolution.WEEKLY:
+            return data.rolling(time=7, center=True).mean()
+        elif resolution == Resolution.MONTHLY:
+            return data.resample(time='1M').mean()
+        elif resolution == Resolution.SEASON:
+            return data.resample(time='3M').mean()
+        else:
+            raise ValueError(f"Résolution non supportée : {resolution}")
+
     def process_scaling(self, data_class: AreaDataset, time: int):        
         resolution = self.get_scaling_resolution(time)
         self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months, resolution)
@@ -112,7 +128,6 @@ class DatasetEra(Dataset):
         else:
             raise ValueError(f"Unsupported resolution: {resolution}")
             
-        
     def expand_year_range(self,year_range):
         if len(year_range) != 2:
             raise ValueError("Year range must be specified as [start_year, end_year]")
@@ -185,10 +200,11 @@ class DatasetEra(Dataset):
             self.nh_class.data = self.change_spatial_resolution(self.nh_class.data, self.spatial_resolution)
         if self.out_spatial_resolution !=1:
             self.target_class.data = self.change_spatial_resolution(self.target_class.data, self.out_spatial_resolution)
-
-        # scale data after regridding
+        
+        # scale data 
         med_data = self.process_scaling(self.med_class, self.resolution_input)
-        nh_data = self.process_scaling(self.nh_class, self.resolution_input)
+        if nh_data is not None:
+            nh_data = self.process_scaling(self.nh_class, self.resolution_input)
         if self.scale_target:
             target = self.process_scaling(self.target_class, self.resolution_output)[self.target_var]
         else:
@@ -199,8 +215,10 @@ class DatasetEra(Dataset):
         if nh_data is not None:
             med_data = self.remap_MED_to_NH(nh_data, med_data)
             print("Data remapped")
-        # merge the 2 datasets 
-        data = xr.merge([med_data, nh_data], compat='override', join='inner')
+            # merge the 2 datasets 
+            data = xr.merge([med_data, nh_data], compat='override', join='inner')
+        else:
+            data = med_data
 
         return  data, target
     
@@ -292,7 +310,6 @@ class DatasetEra(Dataset):
         # Combine the sea and land data into a single dataset
         target_data_combined = xr.Dataset({'sea_mean': sea_data, 'land_mean': land_data})
         target_tensor = torch.tensor((np.transpose(np.array([[target_data_combined['sea_mean'].values, target_data_combined['land_mean'].values]]), (2,1,0))))
-        print(target_tensor.shape)
         
         return target_tensor
     
@@ -308,6 +325,8 @@ class DatasetEra(Dataset):
         input_list = []
         # Aggregate the input data
         input_aggregated, target_aggregated, season_float, year_float = self.aggregator.aggregate(idx)
+        print(season_float, year_float)
+
 
        # input data preparation
         for var in self.global_variables:
@@ -324,9 +343,6 @@ class DatasetEra(Dataset):
         input_tensor = torch.nan_to_num(input_tensor, nan=0.0)
         target_tensor = torch.nan_to_num(target_tensor, nan=0.0)
 
-        print(input_tensor.shape)
-        print(target_tensor.shape)
-        
         return input_tensor, target_tensor
 
 

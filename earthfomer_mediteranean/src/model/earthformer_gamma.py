@@ -296,8 +296,13 @@ class CuboidERAModule(pl.LightningModule):
         input, target = batch
         input = input.float() # (N, in_len, lat, lon, 1)
         target = target.float()# (N, in_len, lat, lon, 1)
+        print("validation step")
+
         print('torch_shape',self.torch_nn_module(input).shape)
         output = self.torch_nn_module(input)
+        print("zeros in target" , (target == 0).sum())
+        print("min input", target.min() )
+        print("min output", output.min())
         alpha, beta = output[..., 0].unsqueeze(-1), output[..., 1].unsqueeze(-1)
         loss = - dist.Gamma(alpha, beta).log_prob(target).mean()
         return alpha, beta, loss, input, target
@@ -346,14 +351,15 @@ class CuboidERAModule(pl.LightningModule):
         return crps.mean()
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
+        print("validation step")
         micro_batch_size = batch[0].shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
         if not self.eval_example_only or data_idx in self.val_example_data_idx_list:
-            print('batch', batch)
-            print("validation step")
+
             alpha, beta, loss, input, target = self(batch)
             
             # Calculate CRPS for Gamma distribution
+            print("compute gamma distribution")
             crps = self.gamma_crps(alpha, beta, target)
             
             if self.local_rank == 0:
@@ -378,6 +384,7 @@ class CuboidERAModule(pl.LightningModule):
             alpha, beta, loss, input, target = self(batch)
             
             # Calculate CRPS for Gamma distribution
+            print("compute gamma distribution")
             crps = self.gamma_crps(alpha, beta, target)
             
             if self.local_rank == 0:

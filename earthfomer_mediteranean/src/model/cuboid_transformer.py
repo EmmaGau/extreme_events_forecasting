@@ -2906,6 +2906,7 @@ class CuboidTransformerModel(nn.Module):
 
         self.input_shape = input_shape
         self.target_shape = target_shape
+        print(f"input_shape={input_shape}, target_shape={target_shape}")
         T_in, H_in, W_in, C_in = input_shape
         T_out, H_out, W_out, C_out = target_shape
         # assert H_in == H_out and W_in == W_out
@@ -3164,7 +3165,8 @@ class CuboidTransformerModel(nn.Module):
             raise NotImplementedError
         return initial_z
 
-    def forward(self, x, verbose=False):
+    def forward(self, batch, verbose=False):
+        x, year_float, season_float = batch 
         B, _, _, _, _ = x.shape
         T_out, H_out, W_out, C_out = self.target_shape
         x = self.initial_encoder(x)
@@ -3190,6 +3192,10 @@ class CuboidTransformerModel(nn.Module):
 
         dec_out = self.final_decoder(dec_out)
         print("final decoder", dec_out.shape)
+        # ici idéalement je rajouterai le season float et le year float 
+        # concatenate float and dec_out
+        dec_out = torch.concatenate((x.flatten(1), year_float, season_float), 1)
+
         out = self.dec_final_proj(dec_out)
         print(self.gamma)
         eps = 1e-6

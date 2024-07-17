@@ -12,7 +12,7 @@ data:
         stream: "/home/egauillard/data/STREAM500_era5_NHExt_1degr_19400101_20240229_new.nc"
         ttr: "/home/egauillard/data/OLR_era5_tropics_1degr_19400101_20240229.nc"
   dataset:
-    variables_nh: ["stream", "sst", "msl"]
+    variables_nh: []
     variables_med: ['tp', 't2m']
     target_variable: 'tp'
     relevant_years: [1940, 1990]
@@ -21,8 +21,8 @@ data:
     land_sea_mask: '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc'
     spatial_resolution: 1
     predict_sea_land: false 
-    out_spatial_resolution : 1
-    scale_target: false
+    out_spatial_resolution : 10
+    scale_target: true
   scaler:
     mode: 'standardize'
   temporal_aggregator:

@@ -114,8 +114,11 @@ class CuboidERAModule(pl.LightningModule):
         self.dataset_config = oc.data
         self.layout = oc.layout.layout
         self.channel_axis = self.layout.find("C")
+        print("channel axis", self.channel_axis)
         self.batch_axis = self.layout.find("N")
-        self.channels = input_shape[self.channel_axis]
+        print("input_shape",input_shape)
+        print("output_shape", output_shape)
+        self.channels = input_shape[self.channel_axis-1]
         self.max_epochs = oc.optim.max_epochs
         self.optim_method = oc.optim.method
         self.lr = oc.optim.lr
@@ -439,8 +442,10 @@ def main():
 
     train_dl, val_dl, test_dl = CuboidERAModule.get_dataloaders(dataset_cfg, total_batch_size, micro_batch_size, VAL_YEARS, TEST_YEARS)
     sample = next(iter(train_dl))
-    input_shape = sample[0].shape
-    output_shape = sample[1].shape
+    input_shape = list(sample[0].shape)[1:]
+    output_shape = list(sample[1].shape)[1:]
+    print("input_shape", input_shape)
+    print("output_shape", output_shape)
 
     accumulate_grad_batches = total_batch_size // (micro_batch_size * args.gpus)
 
