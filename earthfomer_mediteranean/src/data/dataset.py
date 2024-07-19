@@ -4,11 +4,10 @@ import xarray as xr
 import numpy as np 
 import torch 
 from utils.temporal_aggregator import TemporalAggregatorFactory
-from utils.scaler import DataScaler
-import wandb
 from utils.tools import AreaDataset
 from utils.enums import StackType, Resolution
-from utils.statistics import DataStatistics
+from utils.statistics import DataStatistics, DataScaler
+import wandb 
 
 class DatasetEra(Dataset):
     # TODO in statistics add if target is "pr" then do sum else do mean
@@ -39,20 +38,26 @@ class DatasetEra(Dataset):
         self.data_dirs = data_dirs
         self.aggregator_factory = temporal_aggr_factory
         self.scaler = scaler 
-        self.global_variables = self.variables_med + self.variables_nh
+        self.global_variables = self.variables_med.copy()  # Commencez avec les variables méditerranéennes
+
+        if self.variables_nh is not None:
+            self.global_variables.extend(self.variables_nh)
+        
+        if hasattr(self, 'variables_tropics') and self.variables_tropics is not None:
+            self.global_variables.extend(self.variables_tropics)
 
         self.resolution_input = self.aggregator_factory.resolution_input
         self.resolution_output = self.aggregator_factory.resolution_output
+        self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months)
         self.data, self.target = self._load_and_prepare_data()
 
         self.aggregator = self.aggregator_factory.create_aggregator(self.data, self.target)
-
         
         self.first_year = self.data.time.dt.year.min().item()
         self.last_year = self.data.time.dt.year.max().item()
 
         self.land_sea_mask = self.get_binary_sea_mask()
-    
+        
     def _initialize_config(self, wandb_config):
         """Initialize configuration settings."""
         ds_conf = wandb_config["dataset"]
@@ -67,66 +72,12 @@ class DatasetEra(Dataset):
         self.predict_sea_land= ds_conf["predict_sea_land"]
         self.out_spatial_resolution = ds_conf.get("out_spatial_resolution", 1.0)  # Default to 1.0 if not specified
         self.scale_target = ds_conf.get("scale_target", True)
-
-    def select_months_and_resample(self, data, resolution):
-        # Sélectionner les mois d'intérêt
-        data = data.sel(time=data.time.dt.month.isin(self.relevant_months))
-        
-        # Appliquer la moyenne mobile selon la résolution
-        if resolution == Resolution.DAILY:
-            return data  # Pas de changement pour la résolution journalière
-        elif resolution == Resolution.WEEKLY:
-            return data.rolling(time=7, center=True).mean()
-        elif resolution == Resolution.MONTHLY:
-            return data.resample(time='1M').mean()
-        elif resolution == Resolution.SEASON:
-            return data.resample(time='3M').mean()
-        else:
-            raise ValueError(f"Résolution non supportée : {resolution}")
-
-    def process_scaling(self, data_class: AreaDataset, time: int):        
-        resolution = self.get_scaling_resolution(time)
-        self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months, resolution)
-        self.statistics = self.stat_computer._get_stats(data_class)
-        
-        # Assign the appropriate time unit based on the resolution
-        time_unit = self.get_time_unit(resolution)
-        data_class.data = data_class.data.assign_coords({time_unit: getattr(data_class.data.time.dt, time_unit)})
-        
-        # Align statistics with the data based on the resolution
-        statistics = {
-            key: self.statistics[key].sel({f'{resolution.value}': data_class.data[time_unit]}) 
-            for key in self.statistics
-        }
-        
-        # Apply scaling
-        scaled_data = self.scaler.scale(data_class.data, statistics)
-        
-        return scaled_data
-
-    def get_scaling_resolution(self, time):
-        if 1 <= time <= 5:
-            return Resolution.DAILY
-        elif 5 < time <= 14:
-            return Resolution.WEEKLY
-        elif 14 < time <= 60:
-            return Resolution.MONTHLY
-        elif 60 < time <= 90:
-            return Resolution.SEASON
-        else:
-            raise ValueError("Resolution not supported")
-
-    def get_time_unit(self, resolution: Resolution):
-        if resolution == Resolution.DAILY:
-            return 'day'
-        elif resolution == Resolution.WEEKLY:
-            return 'week'
-        elif resolution == Resolution.MONTHLY:
-            return 'month'
-        elif resolution == Resolution.SEASON:
-            return 'season'
-        else:
-            raise ValueError(f"Unsupported resolution: {resolution}")
+        self.variables_tropics = ds_conf.get("variables_tropics", None)
+    
+    def _load_data(self, dir_path):
+        """Load data from a specified directory using xarray."""
+        ds = xr.open_dataset(dir_path, chunks = None)
+        return ds
             
     def expand_year_range(self,year_range):
         if len(year_range) != 2:
@@ -162,18 +113,30 @@ class DatasetEra(Dataset):
         
         return reference_dataset, new_dataset
 
+    def process_scaling(self, data_class: AreaDataset):        
+        # Compute statistics
+        self.statistics = self.stat_computer._get_stats(data_class)
+        # Apply scaling
+        dayofyear = data_class.data.time.dt.dayofyear
+    
+        # Standardiser les données
+        standardized_data = (data_class.data - self.statistics["mean"].sel(dayofyear=dayofyear)) / self.statistics["std"].sel(dayofyear=dayofyear)
+
+        return standardized_data
 
     def _load_and_prepare_data(self):
         """Load data from directories for all variables and create big dataset that contains all variables for both regions
             and keep the relevant years/months."""
         med_datasets = []
         nh_datasets = []
+        tropics_datasets = []
 
         # first check that dataset are aligned temporaly and spatially, and merge datasets
         for var in self.variables_med:
             med_data = self._load_data(self.data_dirs['mediteranean'][var])
             if med_datasets:
                 med_datasets[0], med_data = self.check_dataset(med_datasets[0], med_data, var)
+                # si y a des nan, print something et replace theme by 0 
             med_datasets.append(med_data)
         
         med_data = xr.merge(med_datasets, compat='override', join='inner')
@@ -188,46 +151,87 @@ class DatasetEra(Dataset):
             nh_data = xr.merge(nh_datasets, compat='override', join='inner')
         else:
             nh_data = None
-
-        # create class for each dataset to gather the information
-        self.med_class = AreaDataset("mediteranean", med_data, self.spatial_resolution, self.relevant_years, self.relevant_months, self.variables_med, self.target_var)
-        self.nh_class = AreaDataset("north_hemisphere", nh_data, self.spatial_resolution, self.relevant_years, self.relevant_months, self.variables_nh, self.target_var)
-        self.target_class = AreaDataset("target", med_data[[self.target_var]], self.out_spatial_resolution, self.relevant_years, self.relevant_months, [self.target_var], self.target_var)
-
-        # change resolution if necessary
-        if self.spatial_resolution !=1:
-            self.med_class.data = self.change_spatial_resolution(self.med_class.data, self.spatial_resolution)
-            self.nh_class.data = self.change_spatial_resolution(self.nh_class.data, self.spatial_resolution)
-        if self.out_spatial_resolution !=1:
-            self.target_class.data = self.change_spatial_resolution(self.target_class.data, self.out_spatial_resolution)
         
-        # scale data 
-        med_data = self.process_scaling(self.med_class, self.resolution_input)
-        if nh_data is not None:
-            nh_data = self.process_scaling(self.nh_class, self.resolution_input)
-        if self.scale_target:
-            target = self.process_scaling(self.target_class, self.resolution_output)[self.target_var]
+        if hasattr(self, 'variables_tropics') and self.variables_tropics:
+            for var in self.variables_tropics:
+                tropics_data = self._load_data(self.data_dirs['tropics'][var])
+                if tropics_datasets:
+                    tropics_datasets[0], tropics_data = self.check_dataset(tropics_datasets[0], tropics_data, var)
+                else:
+                    tropics_data['time'] = tropics_data.time.dt.floor('D')
+                tropics_datasets.append(tropics_data)
+            
+            if tropics_datasets:
+                tropics_data = xr.merge(tropics_datasets, compat='override', join='inner')
+            else:
+                tropics_data = None
         else:
-            target = self.target_class.data[self.target_var]
+            tropics_data = None
 
-        print("Data loaded")
-        # Remap Mediterranean to North Hemisphere if necessary
+        # Créer les classes AreaDataset
+        self.med_class = self._create_area_dataset("mediteranean", med_data, self.variables_med)
+        self.nh_class = self._create_area_dataset("north_hemisphere", nh_data, self.variables_nh) if nh_data is not None else None
+        self.tropics_class = self._create_area_dataset("tropics", tropics_data, self.variables_tropics) if tropics_data is not None else None
+        self.target_class = self._create_area_dataset("target", med_data[[self.target_var]], [self.target_var], is_target=True)
+
+        # Mise à l'échelle des données
+        med_data = self.process_scaling(self.med_class)
+        nh_data = self.process_scaling(self.nh_class) if self.nh_class is not None else None
+        tropics_data = self.process_scaling(self.tropics_class) if self.tropics_class is not None else None
+
+        target = self.process_scaling(self.target_class) if self.scale_target else self.target_class.data
+
+        print("Data scaled")
+
+        # Remapping et fusion des données
+        data = self._remap_and_merge_data(med_data, nh_data, tropics_data)
+
+        return data, target
+
+    def _create_area_dataset(self, area, data, variables, is_target=False):
+        if data is None:
+            return None
+        return AreaDataset(
+            area=area,
+            data=data,
+            spatial_resolution=self.out_spatial_resolution if is_target else self.spatial_resolution,
+            temporal_resolution=self.resolution_output if is_target else self.resolution_input,
+            years=self.relevant_years,
+            months=self.relevant_months,
+            vars=variables,
+            target=self.target_var
+        )
+
+    def _remap_and_merge_data(self, med_data, nh_data, tropics_data):
+        # Trouver les temps communs à tous les jeux de données
+        common_times = med_data.time
         if nh_data is not None:
-            med_data = self.remap_MED_to_NH(nh_data, med_data)
-            print("Data remapped")
-            # merge the 2 datasets 
-            data = xr.merge([med_data, nh_data], compat='override', join='inner')
-        else:
-            data = med_data
+            common_times = np.intersect1d(common_times, nh_data.time)
+        if tropics_data is not None:
+            common_times = np.intersect1d(common_times, tropics_data.time)
 
-        return  data, target
-    
-    def _load_data(self, dir_path):
-        """Load data from a specified directory using xarray."""
-        ds = xr.open_dataset(dir_path, chunks = None)
-        ds = self._filter_data_by_time(ds)
-        return ds
-    
+        # Sélectionner seulement les temps communs pour chaque jeu de données
+        med_data = med_data.sel(time=common_times)
+        if nh_data is not None:
+            nh_data = nh_data.sel(time=common_times)
+        if tropics_data is not None:
+            tropics_data = tropics_data.sel(time=common_times)
+
+        data_list = [nh_data]  # Commencer avec les données NH
+
+        if med_data is not None:
+            remapped_med = self.remap_to_NH(nh_data, med_data)
+            data_list.append(remapped_med)
+            print("Mediterranean data remapped to NH")
+        
+        if tropics_data is not None:
+            remapped_tropics = self.remap_to_NH(nh_data, tropics_data)
+            data_list.append(remapped_tropics)
+            print("Tropical data remapped to NH")
+        
+        data = xr.merge(data_list, compat='override', join='inner')
+        return data
+
     def get_binary_sea_mask(self):
         mask = xr.open_dataset(self.mask_path)
         threshold = 0.3
@@ -239,16 +243,25 @@ class DatasetEra(Dataset):
         )
         return mask["lsm"]
 
-    def remap_MED_to_NH(self, nh_data, med_data):
-        """Remap Mediterranean data to North Hemisphere grid and pad with zeros."""
+    def remap_to_NH(self, nh_data, data_to_remap):
+        """
+        Remap data to North Hemisphere grid and pad with zeros.
+        
+        Args:
+        nh_data (xarray.Dataset): The reference Northern Hemisphere dataset.
+        data_to_remap (xarray.Dataset): The dataset to be remapped.
+        
+        Returns:
+        xarray.Dataset: The remapped data on the NH grid.
+        """
         # Find the overlap region
-        med_lon_min, med_lon_max = med_data.longitude.min().item(), med_data.longitude.max().item()
-        med_lat_min, med_lat_max = med_data.latitude.min().item(), med_data.latitude.max().item()
+        lon_min, lon_max = data_to_remap.longitude.min().item(), data_to_remap.longitude.max().item()
+        lat_min, lat_max = data_to_remap.latitude.min().item(), data_to_remap.latitude.max().item()
 
-        # Create a mask for the Mediterranean region in the NH grid
+        # Create a mask for the region in the NH grid
         mask = (
-            (nh_data.longitude >= med_lon_min) & (nh_data.longitude <= med_lon_max) &
-            (nh_data.latitude >= med_lat_min) & (nh_data.latitude <= med_lat_max)
+            (nh_data.longitude >= lon_min) & (nh_data.longitude <= lon_max) &
+            (nh_data.latitude >= lat_min) & (nh_data.latitude <= lat_max)
         )
 
         # Get a reference variable from NH data for shape
@@ -258,37 +271,38 @@ class DatasetEra(Dataset):
         # Create a new dataset
         remapped_data = xr.Dataset()
 
-        # Fill in the Mediterranean region
-        for var in med_data.data_vars:
+        # Fill in the region
+        for var in data_to_remap.data_vars:
             if var == 'time_bnds':
                 # Just copy time_bnds as is
-                remapped_data[var] = med_data[var].copy()
+                remapped_data[var] = data_to_remap[var].copy()
             else:
                 # Check the structure of the current variable
-                if set(med_data[var].dims) == set(nh_shape.dims):
-                    # If dimensions match, create a zero-filled DataArray and fill with med data
-                    remapped_var = xr.zeros_like(nh_shape)
-                    med_values = med_data[var].broadcast_like(mask)
-                    remapped_var = remapped_var.where(~mask, med_values)
+                if set(data_to_remap[var].dims) == set(nh_shape.dims):
+                    # Ensure that the time dimension is aligned
+                    common_times = np.intersect1d(data_to_remap.time, nh_data.time)
+                    data_slice = data_to_remap[var].sel(time=common_times)
+                    nh_slice = nh_data[nh_ref_var].sel(time=common_times)
+
+                    # Interpolate data to NH grid
+                    interpolated = data_slice.interp(
+                        latitude=nh_slice.latitude,
+                        longitude=nh_slice.longitude,
+                        method='nearest'
+                    )
+                    
+                    # Create a zero-filled DataArray and fill with interpolated data
+                    remapped_var = xr.zeros_like(nh_slice)
+                    remapped_var = remapped_var.where(~mask, interpolated)
                 else:
                     # If dimensions don't match, just copy the original data
-                    remapped_var = med_data[var].copy()
+                    remapped_var = data_to_remap[var].copy()
                 
                 # Add the variable to the new dataset
                 remapped_data[var] = remapped_var
 
         return remapped_data
-
-    def change_spatial_resolution(self, data, spatial_resolution):
-        regridded_data = data.coarsen(latitude=spatial_resolution, longitude=spatial_resolution, boundary="trim").mean()
-        return regridded_data
-
-    def _filter_data_by_time(self, data):
-        """Filter the data to include only the relevant months and years."""
-        data = data.sel(time=data['time.year'].isin(self.relevant_years))
-        data = data.sel(time=data['time.month'].isin(self.relevant_months))
-        return data
-    
+            
     def __len__(self):
         len = self.aggregator.compute_len_dataset()
         return len
@@ -317,7 +331,7 @@ class DatasetEra(Dataset):
         if self.predict_sea_land:
             target_tensor = self._prepare_sea_land_target(target_data)
         else: 
-            target_array = np.transpose(np.array([target_data.values]), (1,2,3,0))
+            target_array = np.transpose(np.array([target_data[self.target_var].values]), (1,2,3,0))
             target_tensor = torch.tensor(target_array)
         return target_tensor
         
@@ -326,7 +340,6 @@ class DatasetEra(Dataset):
         # Aggregate the input data
         input_aggregated, target_aggregated, season_float, year_float = self.aggregator.aggregate(idx)
         print(season_float, year_float)
-
 
        # input data preparation
         for var in self.global_variables:
@@ -354,16 +367,18 @@ if __name__ == "__main__":
                  'north_hemisphere': {"stream": "/home/egauillard/data/STREAM250_era5_NHExt_1degr_19400101_20240229_new.nc",
                                       "sst": "/home/egauillard/data/SST_era5_NHExt_1degr_19400101-20240229_new.nc",
                                       "msl": "/home/egauillard/data/MSLP_era5_NHExt_1degr_19400101_20240229_new.nc",
-                                      }}
+                                      },
+                 'tropics': {"ttr": "/home/egauillard/data/OLR_era5_tropics_1degr_19400101_20240229.nc"}}
 
     wandb_config = {
     'dataset': {
-        'variables_nh': ["stream","sst", "msl"],
+        'variables_tropics': ["ttr"],
+        'variables_nh': ["stream", "msl"],
         'variables_med': ['tp', "t2m"],
         'target_variable': 'tp',
-        'relevant_years': [2000,2005],
+        'relevant_years': [2000,2003],
         'relevant_months': [10,11,12,1,2,3],
-        'scaling_years': [2000,2005],
+        'scaling_years': [2000,2003],
         'land_sea_mask': '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc',
         'spatial_resolution': 1,
         'predict_sea_land': False,

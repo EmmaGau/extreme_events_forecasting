@@ -4,7 +4,7 @@ import numpy as np
 from enum import Enum
 import xarray as xr
 import torch 
-from utils.scaler import DataScaler
+from utils.statistics import DataScaler
 from utils.enums import StackType, Resolution
 from utils.statistics import DataStatistics
 from typing import List
@@ -85,28 +85,16 @@ class TemporalAggregator:
         last_year = list(self.wet_season_data.groups.keys())[-1]
         self.year_float = (self.current_wet_season_year - first_year) / (last_year - first_year)
 
-        # compute the window of temporal indexes we will use to create the input data
-        input_time_indexes = wet_season.time.values[self._current_temporal_idx:self._current_temporal_idx + width_input]
-        input_window = wet_season.sel(time=input_time_indexes)
+        # Sélectionner les données d'entrée
+        input_time_indexes = wet_season.time.values[self._current_temporal_idx:self._current_temporal_idx + width_input:self.resolution_input]
+        input_data = wet_season.sel(time=input_time_indexes)
 
-        # compute the indexes of interest for the target wet_season
+        # Sélectionner les données de sortie
         start_idx_output = self._current_temporal_idx + width_input
-        target_time_indexes = wet_season_target.time.values[start_idx_output:start_idx_output + self.resolution_output * self.out_len]
-        output_window = wet_season_target.sel(time=target_time_indexes)
+        target_time_indexes = wet_season_target.time.values[start_idx_output:start_idx_output + width_output:self.resolution_output]
+        target_data = wet_season_target.sel(time=target_time_indexes)
 
-        # stack mean for 
-        for i in range(self.in_len):
-            mean_input = input_window.sel(time=input_time_indexes[i * self.resolution_input:(i + 1) * self.resolution_input]).mean(dim="time")
-            input_data.append(mean_input)
-
-        for i in range(self.out_len):
-            mean_output = output_window.sel(time=target_time_indexes[i * self.resolution_output:(i + 1) * self.resolution_output]).mean(dim="time")
-            target_data.append(mean_output)
-
-        input_data = xr.concat(input_data, dim="time")
-        target_data = xr.concat(target_data, dim="time")
-
-        # update temporal index for next iteration
+        # Mettre à jour l'index temporel pour la prochaine itération
         self._current_temporal_idx += self.gap
         self._temporal_idx_maping[idx] = self._current_temporal_idx
 
