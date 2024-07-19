@@ -39,4 +39,4 @@ echo "Python executable: $(which python)"
 
 # Exécutez le script
 python -c "import sys; print(sys.path)"
-python inference/test.py /home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240715_165302/checkpoints/model-epoch=057.ckpt
+python inference/test.py --checkpoint_path /home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240716_165741/checkpoints/model-epoch=031.ckpt

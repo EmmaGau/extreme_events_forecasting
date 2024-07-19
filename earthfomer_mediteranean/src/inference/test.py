@@ -8,12 +8,12 @@ from tqdm import tqdm
 from omegaconf import OmegaConf
 from  model.earthformer_model import CuboidERAModule
 from data.dataset import DatasetEra
-from utils.scaler import DataScaler
+from utils.statistics import DataScaler
 from utils.temporal_aggregator import TemporalAggregatorFactory
 import pandas as pd
 import argparse 
 
-def load_model(checkpoint_path, config_path):
+def load_model(checkpoint_path, config_path, input_shape, output_shape):
     # Load configuration
     oc = OmegaConf.load(config_path)
     
@@ -21,9 +21,10 @@ def load_model(checkpoint_path, config_path):
     model = CuboidERAModule(
         total_num_steps=1,  # This value doesn't matter for inference
         config_file_path=config_path,
-        save_dir="temp"  # This directory won't be used for inference
+        save_dir="temp",
+        input_shape = input_shape,
+        output_shape = output_shape # This directory won't be used for inference
     )
-    
     # Load the state dict
     state_dict = torch.load(checkpoint_path, map_location=torch.device('cpu'))
     model.load_state_dict(state_dict['state_dict'])
@@ -144,11 +145,7 @@ if __name__ == "__main__":
     # Get the configuration file
     config_path = get_cfg_file_from_chkpt(checkpoint_path)
 
-    # Create a folder for saving plots
-    save_folder = create_save_folder(checkpoint_path)
-                                     
-    # Load model and configuration
-    model, oc = load_model(checkpoint_path, config_path)
+    oc = OmegaConf.load(config_path)
 
     # Get test dataloader
     dataset_cfg = OmegaConf.to_object(oc.data)
@@ -158,7 +155,19 @@ if __name__ == "__main__":
     scaler = DataScaler(dataset_cfg['scaler'])
     temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'])
     test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory, scaler)
+
     test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=oc.optim.micro_batch_size, shuffle=False, num_workers=4)
+    sample = next(iter(test_dataloader))
+    input_shape = list(sample[0].shape)[1:]
+    output_shape = list(sample[1].shape)[1:]
+    print("input_shape", input_shape)
+    print("output_shape", output_shape)
+
+    # Create a folder for saving plots
+    save_folder = create_save_folder(checkpoint_path)
+                                     
+    # Load model and configuration
+    model, oc = load_model(checkpoint_path, config_path, input_shape, output_shape)
 
     # Run inference and save plots
     inference_and_plot(model, test_dataloader, save_folder, scaler)

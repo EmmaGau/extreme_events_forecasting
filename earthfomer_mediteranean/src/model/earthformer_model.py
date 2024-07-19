@@ -28,7 +28,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from data.dataset import DatasetEra
 from torch.utils.data import DataLoader
-from utils.scaler import DataScaler
+from utils.statistics import DataScaler
 from utils.temporal_aggregator import TemporalAggregatorFactory
 import time
 
