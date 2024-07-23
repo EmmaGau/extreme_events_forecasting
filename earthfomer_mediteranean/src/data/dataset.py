@@ -62,7 +62,7 @@ class DatasetEra(Dataset):
         """Initialize configuration settings."""
         ds_conf = wandb_config["dataset"]
         self.spatial_resolution = ds_conf["spatial_resolution"]
-        self.target_var = ds_conf["target_variable"]
+        self.target_variables = ds_conf["target_variables"]
         self.variables_nh = ds_conf["variables_nh"]
         self.variables_med = ds_conf["variables_med"]
         self.mask_path = ds_conf["land_sea_mask"]
@@ -172,7 +172,7 @@ class DatasetEra(Dataset):
         self.med_class = self._create_area_dataset("mediteranean", med_data, self.variables_med)
         self.nh_class = self._create_area_dataset("north_hemisphere", nh_data, self.variables_nh) if nh_data is not None else None
         self.tropics_class = self._create_area_dataset("tropics", tropics_data, self.variables_tropics) if tropics_data is not None else None
-        self.target_class = self._create_area_dataset("target", med_data[[self.target_var]], [self.target_var], is_target=True)
+        self.target_class = self._create_area_dataset("target", med_data[self.target_variables], self.target_variables, is_target=True)
 
         # Mise à l'échelle des données
         med_data = self.process_scaling(self.med_class)
@@ -180,6 +180,7 @@ class DatasetEra(Dataset):
         tropics_data = self.process_scaling(self.tropics_class) if self.tropics_class is not None else None
 
         target = self.process_scaling(self.target_class) if self.scale_target else self.target_class.data
+        print(self.target_class.spatial_resolution)
 
         print("Data scaled")
 
@@ -199,7 +200,7 @@ class DatasetEra(Dataset):
             years=self.relevant_years,
             months=self.relevant_months,
             vars=variables,
-            target=self.target_var
+            target=self.target_variables
         )
 
     def _remap_and_merge_data(self, med_data, nh_data, tropics_data):
@@ -217,9 +218,9 @@ class DatasetEra(Dataset):
         if tropics_data is not None:
             tropics_data = tropics_data.sel(time=common_times)
 
-        data_list = [nh_data]  # Commencer avec les données NH
+        data_list = [nh_data]  if nh_data is not None else [med_data]
 
-        if med_data is not None:
+        if nh_data is not None:
             remapped_med = self.remap_to_NH(nh_data, med_data)
             data_list.append(remapped_med)
             print("Mediterranean data remapped to NH")
@@ -331,8 +332,12 @@ class DatasetEra(Dataset):
         if self.predict_sea_land:
             target_tensor = self._prepare_sea_land_target(target_data)
         else: 
-            target_array = np.transpose(np.array([target_data[self.target_var].values]), (1,2,3,0))
-            target_tensor = torch.tensor(target_array)
+            target_list = []
+            for var in self.target_variables:
+                target_list.append(target_data[var].values)
+            
+            target_data_np = np.transpose(np.array(target_list), (1,2,3,0))
+            target_tensor = torch.tensor(target_data_np)  # size (batch_size, height, width, channels)
         return target_tensor
         
     def __getitem__(self, idx):
@@ -356,6 +361,8 @@ class DatasetEra(Dataset):
         input_tensor = torch.nan_to_num(input_tensor, nan=0.0)
         target_tensor = torch.nan_to_num(target_tensor, nan=0.0)
 
+        # dans le batch donnez season_float, year_float, les dates correspondants au target et enfin climatology
+
         return input_tensor, target_tensor
 
 
@@ -375,7 +382,7 @@ if __name__ == "__main__":
         'variables_tropics': ["ttr"],
         'variables_nh': ["stream", "msl"],
         'variables_med': ['tp', "t2m"],
-        'target_variable': 'tp',
+        'target_variables': ['tp'],
         'relevant_years': [2000,2003],
         'relevant_months': [10,11,12,1,2,3],
         'scaling_years': [2000,2003],

@@ -62,6 +62,4 @@ class AreaDataset:
     def change_spatial_resolution(self,spatial_resolution: int):
         if spatial_resolution != 1:
             regridded_data = self.data.coarsen(latitude=spatial_resolution, longitude=spatial_resolution, boundary="trim").mean()
-            return regridded_data
-        else :
-            return self.data
+            self.data = regridded_data 

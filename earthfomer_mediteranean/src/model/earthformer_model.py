@@ -51,14 +51,14 @@ class CuboidERAModule(pl.LightningModule):
         oc = OmegaConf.load(open(config_file_path))
         model_cfg = OmegaConf.to_object(oc.model)
         num_blocks = len(model_cfg["enc_depth"])
-        input_shape = input_shape if input_shape is not None else model_cfg["input_shape"]
-        output_shape = output_shape if output_shape is not None else model_cfg["target_shape"]
+        self.input_shape = input_shape if input_shape is not None else model_cfg["input_shape"]
+        self.output_shape = output_shape if output_shape is not None else model_cfg["target_shape"]
 
         
         self.torch_nn_module = CuboidTransformerModel(
             gamma = model_cfg["gamma"],
-            input_shape= input_shape,
-            target_shape= output_shape,
+            input_shape= self.input_shape,
+            target_shape= self.output_shape,
             base_units=model_cfg["base_units"],
             block_units=model_cfg["block_units"],
             scale_alpha=model_cfg["scale_alpha"],
@@ -118,7 +118,7 @@ class CuboidERAModule(pl.LightningModule):
         self.batch_axis = self.layout.find("N")
         print("input_shape",input_shape)
         print("output_shape", output_shape)
-        self.channels = input_shape[self.channel_axis-1]
+        self.channels = self.input_shape[self.channel_axis-1]
         self.max_epochs = oc.optim.max_epochs
         self.optim_method = oc.optim.method
         self.lr = oc.optim.lr
@@ -137,6 +137,10 @@ class CuboidERAModule(pl.LightningModule):
         self.valid_mae = torchmetrics.MeanAbsoluteError()
         self.test_mse = torchmetrics.MeanSquaredError()
         self.test_mae = torchmetrics.MeanAbsoluteError()
+
+
+        for i in range(self.output_shape[self.channel_axis-1]):
+            setattr(self, f'valid_mae_var_{i}', torchmetrics.MeanAbsoluteError())
 
         self.configure_save(cfg_file_path=config_file_path)
 
@@ -302,8 +306,8 @@ class CuboidERAModule(pl.LightningModule):
 
     def forward(self, batch):
         input, target = batch
-        input = input.float() # (N, in_len, lat, lon, 1)
-        target = target.float()# (N, in_len, lat, lon, 1)
+        input = input.float() # (N, in_len, lat, lon, nb_target)
+        target = target.float()# (N, in_len, lat, lon, nb_target)
         pred_seq = self.torch_nn_module(input)
         print(pred_seq.shape, target.shape)
         loss = F.mse_loss(pred_seq, target)
@@ -311,6 +315,13 @@ class CuboidERAModule(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         pred_seq, loss, input, target = self(batch)
+         # Calculer la MSE pour chaque variable
+        mse_per_var = F.mse_loss(pred_seq, target, reduction='none').mean(dim=(0, 1, 2, 3))
+    
+        # Logguer la loss pour chaque variable
+        for i, mse in enumerate(mse_per_var):
+            self.log(f'train_loss_var_{i}', mse, on_step=False, on_epoch=True)
+
         micro_batch_size = input.shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
         if self.local_rank == 0:
@@ -320,7 +331,7 @@ class CuboidERAModule(pl.LightningModule):
                 target_seq=target.detach().float().cpu().numpy(),
                 pred_seq=pred_seq.detach().float().cpu().numpy(),
                 mode="train", )
-        self.log('train_loss', loss, on_step=True, on_epoch=False)
+        self.log('train_loss', loss, on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
@@ -328,6 +339,11 @@ class CuboidERAModule(pl.LightningModule):
         data_idx = int(batch_idx * micro_batch_size)
         if not self.eval_example_only or data_idx in self.val_example_data_idx_list:
             pred_seq, loss, in_seq, target_seq= self(batch)
+            # Calculer le MAE pour chaque variable
+            mae_per_var = torch.abs(pred_seq - target_seq).mean(dim=(0, 1, 2, 3))
+            for i, mae in enumerate(mae_per_var):
+                getattr(self, f'valid_mae_var_{i}')(pred_seq[..., i], target_seq[..., i])
+    
             if self.local_rank == 0:
                 self.save_vis_step_end(
                     data_idx=data_idx,
@@ -337,7 +353,21 @@ class CuboidERAModule(pl.LightningModule):
                     mode="val", )
             self.valid_mse(pred_seq, target_seq)
             self.valid_mae(pred_seq, target_seq)
-            self.log('valid_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+
+            # Calculer le skill score
+            mse_model = F.mse_loss(pred_seq, target_seq)
+            mse_climatology = torch.mean(target_seq**2)  # Climatologie prédit 0
+            skill_score = 1 - (mse_model / mse_climatology)
+            num_variables = pred_seq.shape[-1]
+            for i in range(num_variables):
+                mse_model_i = F.mse_loss(pred_seq[..., i], target_seq[..., i])
+                mse_climatology_i = torch.mean(target_seq[..., i]**2)
+                skill_score_i = 1 - (mse_model_i / mse_climatology_i)
+                self.log(f'valid_skill_score_var_{i}', skill_score_i, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
+            
+            self.log('valid_loss', loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True)
+            self.log('valid_skill_score', skill_score, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         
         return {'loss': loss}
 
@@ -349,6 +379,11 @@ class CuboidERAModule(pl.LightningModule):
         self.log('valid_mse_epoch', valid_mse, prog_bar=True, on_epoch=True, sync_dist=True)
         self.log('valid_mae_epoch', valid_mae, prog_bar=True, on_epoch=True, sync_dist=True)
         self.log('valid_loss_epoch', valid_loss, prog_bar=True, on_epoch=True, sync_dist=True)
+
+        for i in range(self.output_shape[self.channel_axis-1]):
+            mae_var = getattr(self, f'valid_mae_var_{i}').compute()
+            self.log(f'valid_mae_epoch_var_{i}', mae_var, prog_bar=True, on_epoch=True, sync_dist=True)
+            getattr(self, f'valid_mae_var_{i}').reset()
         
         self.valid_mae.reset()
         self.valid_mse.reset()
