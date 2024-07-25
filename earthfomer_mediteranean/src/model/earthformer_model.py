@@ -53,9 +53,10 @@ class CuboidERAModule(pl.LightningModule):
         num_blocks = len(model_cfg["enc_depth"])
         self.input_shape = input_shape if input_shape is not None else model_cfg["input_shape"]
         self.output_shape = output_shape if output_shape is not None else model_cfg["target_shape"]
-
+        self.season_float = model_cfg["season_float"] if "season_float" in model_cfg else False
         
         self.torch_nn_module = CuboidTransformerModel(
+            season_float = self.season_float,
             gamma = model_cfg["gamma"],
             input_shape= self.input_shape,
             target_shape= self.output_shape,
@@ -305,10 +306,12 @@ class CuboidERAModule(pl.LightningModule):
 
 
     def forward(self, batch):
-        input, target = batch
+        input, target, season_float, year_float, *_ = batch
         input = input.float() # (N, in_len, lat, lon, nb_target)
         target = target.float()# (N, in_len, lat, lon, nb_target)
-        pred_seq = self.torch_nn_module(input)
+        season_float = season_float.float()
+        year_float = year_float.float()
+        pred_seq = self.torch_nn_module(input, season_float, year_float)
         print(pred_seq.shape, target.shape)
         loss = F.mse_loss(pred_seq, target)
         return pred_seq, loss, input, target
@@ -366,7 +369,7 @@ class CuboidERAModule(pl.LightningModule):
                 self.log(f'valid_skill_score_var_{i}', skill_score_i, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
             
-            self.log('valid_loss', loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True)
+            self.log('valid_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
             self.log('valid_skill_score', skill_score, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         
         return {'loss': loss}

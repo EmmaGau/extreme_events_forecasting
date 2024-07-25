@@ -12,7 +12,8 @@ data:
         stream: "/home/egauillard/data/STREAM500_era5_NHExt_1degr_19400101_20240229_new.nc"
         ttr: "/home/egauillard/data/OLR_era5_tropics_1degr_19400101_20240229.nc"
   dataset:
-    variables_nh: []
+    variables_nh: ["stream", "sst", "msl"]
+    variables_tropics: ['ttr']
     variables_med: ['tp', 't2m']
     target_variables: ['tp', 't2m']
     relevant_years: [1940, 1990]
@@ -25,14 +26,16 @@ data:
     scale_target: true
   scaler:
     mode: 'standardize'
+    coarse: False
   temporal_aggregator:
-    in_len: 3
+    in_len: 6
     out_len: 3
     resolution_input: 7
     resolution_output: 7
     gap: 1
 
 model:
+  season_float: False
   gamma: False
   base_units: 64
   block_units: null

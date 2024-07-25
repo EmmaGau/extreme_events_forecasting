@@ -43,6 +43,23 @@ class TemporalAggregator:
         self._current_temporal_idx = 0
         self.current_wet_season_year = list(self.wet_season_data.groups.keys())[0]
         self._temporal_idx_maping = {}
+        self.date_encoder = {}
+        self.date_decoder = {}
+        self._encode_all_dates()
+
+    def _encode_all_dates(self):
+        all_dates = set(self.dataset.time.values) | set(self.target.time.values)
+        for i, date in enumerate(sorted(all_dates)):
+            date_str = pd.Timestamp(date).strftime('%Y-%m-%d')
+            self.date_encoder[date_str] = i
+            self.date_decoder[i] = date_str
+
+    def _encode_date(self, date):
+        date_str = pd.Timestamp(date).strftime('%Y-%m-%d')
+        return self.date_encoder[date_str]
+
+    def _decode_date(self, encoded_date):
+        return self.date_decoder[encoded_date]
         
     def _group_by_wet_season(self, data):
         self.start_month = min(np.unique(data.time.dt.month.values))
@@ -79,10 +96,10 @@ class TemporalAggregator:
             wet_season_target = self.wet_season_target[self.current_wet_season_year]
 
         first_time_value = wet_season.time.dt.season.values[self._current_temporal_idx]
-        self.season_float = MAPPING_SEASON[str(first_time_value)]
+        self.season_float = MAPPING_SEASON[str(first_time_value)]/4
 
-        first_year = list(self.wet_season_data.groups.keys())[0]
-        last_year = list(self.wet_season_data.groups.keys())[-1]
+        first_year = 1940
+        last_year = 2024
         self.year_float = (self.current_wet_season_year - first_year) / (last_year - first_year)
 
         # Sélectionner les données d'entrée
@@ -98,7 +115,14 @@ class TemporalAggregator:
         self._current_temporal_idx += self.gap
         self._temporal_idx_maping[idx] = self._current_temporal_idx
 
-        return input_data, target_data, self.season_float, self.year_float
+        # Encoder les indices temporels
+        encoded_input_time_indexes = [self._encode_date(date) for date in input_time_indexes]
+        encoded_target_time_indexes = [self._encode_date(date) for date in target_time_indexes]
+
+        return input_data, target_data, self.season_float, self.year_float, encoded_input_time_indexes, encoded_target_time_indexes
+    
+    def decode_time_indexes(self, encoded_indexes):
+        return [self._decode_date(int(idx)) for idx in encoded_indexes]
     
 class TemporalAggregatorFactory:
     def __init__(self, config):

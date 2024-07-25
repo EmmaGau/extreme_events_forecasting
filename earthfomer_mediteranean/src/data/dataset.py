@@ -48,7 +48,7 @@ class DatasetEra(Dataset):
 
         self.resolution_input = self.aggregator_factory.resolution_input
         self.resolution_output = self.aggregator_factory.resolution_output
-        self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months)
+        self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months, coarse= self.scaler.coarse)
         self.data, self.target = self._load_and_prepare_data()
 
         self.aggregator = self.aggregator_factory.create_aggregator(self.data, self.target)
@@ -117,11 +117,7 @@ class DatasetEra(Dataset):
         # Compute statistics
         self.statistics = self.stat_computer._get_stats(data_class)
         # Apply scaling
-        dayofyear = data_class.data.time.dt.dayofyear
-    
-        # Standardiser les données
-        standardized_data = (data_class.data - self.statistics["mean"].sel(dayofyear=dayofyear)) / self.statistics["std"].sel(dayofyear=dayofyear)
-
+        standardized_data = self.scaler.transform(data_class.data, self.statistics)
         return standardized_data
 
     def _load_and_prepare_data(self):
@@ -343,7 +339,7 @@ class DatasetEra(Dataset):
     def __getitem__(self, idx):
         input_list = []
         # Aggregate the input data
-        input_aggregated, target_aggregated, season_float, year_float = self.aggregator.aggregate(idx)
+        input_aggregated, target_aggregated, season_float, year_float , input_time_indexes, target_time_indexes = self.aggregator.aggregate(idx)
         print(season_float, year_float)
 
        # input data preparation
@@ -360,10 +356,10 @@ class DatasetEra(Dataset):
         # replace nan values by 0
         input_tensor = torch.nan_to_num(input_tensor, nan=0.0)
         target_tensor = torch.nan_to_num(target_tensor, nan=0.0)
+        input_time_tensor = torch.tensor(input_time_indexes)
+        target_time_tensor = torch.tensor(target_time_indexes)
 
-        # dans le batch donnez season_float, year_float, les dates correspondants au target et enfin climatology
-
-        return input_tensor, target_tensor
+        return input_tensor, target_tensor, season_float, year_float, input_time_tensor, target_time_tensor
 
 
     
@@ -394,7 +390,8 @@ if __name__ == "__main__":
         
     },
     'scaler': {
-        'mode': 'standardize'
+        'mode': 'standardize',
+        'coarse': True,
     },
     'temporal_aggregator': {
         'in_len': 3,
@@ -406,7 +403,7 @@ if __name__ == "__main__":
 }
 
     # Initialize wandb
-    wandb.init(project='linear_era', config=wandb_config)
+    # wandb.init(project='linear_era', config=wandb_config)
 
     # Initialize dataset and dataloaders
     scaler = DataScaler(wandb_config['scaler'])

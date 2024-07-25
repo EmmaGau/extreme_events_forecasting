@@ -8,39 +8,48 @@ import xarray as xr
 import os
 from typing import List
 
+# add an option parameter coarse scaling instead of having a scaling per day, we do the mean over all days of the year
+# then we only have one statistics, also add this option to the path of the file to save the statistics
+
 class DataScaler:
-    def __init__(self, config) -> None:
+    def __init__(self, config):
         self.mode = config['mode']
-    
-    def normalize(self,data, min, max):
-        return (data - min) / (max - min)
-    
-    def standardize(self,data, mean, std):
-        return (data - mean) / std
+        # add an argument coarse 
+        self.coarse = config.get("coarse", False)
 
-    def remove_outliers_23std(self, data, clipped_min, clipped_max):
-        data = np.clip(data.data[0, :].astype(float), clipped_min, clipped_max)
-        bottom = clipped_max - clipped_min
-        bottom[bottom == 0] = "nan"
-        data = (data - clipped_min) / bottom
-        return np.nan_to_num(data, 0)
-
-    def scale(self, data, stats):
-        mean,std,min,max = stats.values()
-        if self.mode == "normalize":
-            return self.normalize(data, min, max)
-        if self.mode == "std23":
-            return self.remove_outliers_23std(data, min, max)
-        elif self.mode == "standardize":
-            return self.standardize(data, mean, std)
+    def inverse_transform(self, data, statistics):
+        if self.mode == 'standardize':
+            return self._inverse_standardize(data, statistics)
         else:
-            raise ValueError(f"Unknown mode {self.mode}")
+            raise ValueError(f"Unsupported scaling mode: {self.mode}")
+    
+    def transform(self, data, statistics):
+        if self.mode == 'standardize':
+            return self._standardize(data, statistics)
+        else:
+            raise ValueError(f"Unsupported scaling mode: {self.mode}")
+    
+    def _standardize(self, data : xr.Dataset, statistics: xr.Dataset):
+        if self.coarse:
+            standardized_data = (data - statistics["mean"]) / statistics["std"]
+        else:
+            dayofyear = data.time.dt.dayofyear
+            # Standardiser les données
+            standardized_data = (data - statistics["mean"].sel(dayofyear=dayofyear)) / statistics["std"].sel(dayofyear=dayofyear)
+        return standardized_data
 
+    def _inverse_standardize(self, data, statistics):
+        if self.coarse:
+            return (data * statistics["std"]) + statistics["mean"]
+        else:
+            dayofyear = data.time.dt.dayofyear
+            return (data * statistics["std"].sel(dayofyear=dayofyear)) + statistics["mean"].sel(dayofyear=dayofyear)
 
 class DataStatistics:
-    def __init__(self, years: List[int], months: List[int]):
+    def __init__(self, years: List[int], months: List[int], coarse: bool = False):
         self.years = years
         self.months = months
+        self.coarse = coarse
     
     def _get_years_months_str(self):
         years_range = f"{min(self.years)}-{max(self.years)}"
@@ -58,6 +67,10 @@ class DataStatistics:
 
         path_base = f"/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/statistics/"
         path_suffix = f"{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_{temporal_resolution}days"
+        
+        # Ajouter 'coarse' au path si le mode coarse est activé
+        if self.coarse:
+            path_suffix += "_coarse"
 
         paths = {
             "mean": f"{path_base}mean_{path_suffix}.nc",
@@ -80,17 +93,25 @@ class DataStatistics:
         data = data.sel(time=data.time.dt.year.isin(self.years))
         data = data.sel(time=data.time.dt.month.isin(self.months))
 
-        # Grouper par jour de l'année (ignorant l'année)
-        grouped = data.groupby('time.dayofyear')
-        
+        if self.coarse:
+            # Calculer les statistiques sur tous les jours de toutes les années
+            stats = {
+                "mean": data.mean(dim='time'),
+                "std": data.std(dim='time'),
+                "min": data.min(dim='time'),
+                "max": data.max(dim='time')
+            }
+        else:
+            # Grouper par jour de l'année (ignorant l'année)
+            grouped = data.groupby('time.dayofyear')
+            stats = {
+                "mean": grouped.mean(dim='time'),
+                "std": grouped.std(dim='time'),
+                "min": grouped.min(dim='time'),
+                "max": grouped.max(dim='time')
+            }
 
-        stats = {
-            "mean": grouped.mean(dim='time'),
-            "std": grouped.std(dim='time'),
-            "min": grouped.min(dim='time'),
-            "max": grouped.max(dim='time')
-        }
-        # rajouter a std un epsilon pour ceux qui valent 0
+        # Ajouter un epsilon à std pour ceux qui valent 0
         epsilon = 1e-6
         stats["std"] = xr.where(stats["std"] == 0, epsilon, stats["std"])
 
@@ -106,11 +127,14 @@ class DataStatistics:
 
         path_base = f"/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/statistics/"
         path_suffix = f"{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_{temporal_resolution}days"
+        
+        # Ajouter 'coarse' au path si le mode coarse est activé
+        if self.coarse:
+            path_suffix += "_coarse"
 
         for stat_name, stat_data in stats.items():
             path = f"{path_base}{stat_name}_{path_suffix}.nc"
             stat_data.to_netcdf(path)
-
 
 if __name__ == "__main__":
     years = [2005,2011]

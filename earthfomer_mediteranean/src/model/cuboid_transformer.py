@@ -2797,6 +2797,7 @@ class CuboidTransformerModel(nn.Module):
     def __init__(self,
                  input_shape,
                  target_shape,
+                 season_float = False,
                  gamma=False,
                  base_units=128,
                  block_units=None,
@@ -2893,6 +2894,7 @@ class CuboidTransformerModel(nn.Module):
         self.norm_init_mode = norm_init_mode
 
         self.gamma = gamma
+        self.season_float = season_float
 
         assert len(enc_depth) == len(dec_depth)
         self.base_units = base_units
@@ -3073,7 +3075,11 @@ class CuboidTransformerModel(nn.Module):
                                               linear_init_mode=self.down_up_linear_init_mode,
                                               norm_init_mode=self.norm_init_mode)
             new_input_shape = self.initial_encoder.patch_merge.get_out_shape(self.input_shape)
-            self.dec_final_proj = nn.Linear(self.base_units, C_out)
+            if self.season_float:
+                self.dec_final_proj = nn.Linear(self.base_units + 2, C_out)  # +2 pour year et season
+            else:
+                self.dec_final_proj = nn.Linear(self.base_units, C_out)
+            print("dec", self.dec_final_proj)
             # else:
             #     self.initial_encoder = nn.Linear(C_in, self.base_units)
             #     self.final_decoder = nn.Identity()
@@ -3109,7 +3115,12 @@ class CuboidTransformerModel(nn.Module):
                 conv_init_mode=self.conv_init_mode,
                 linear_init_mode=self.down_up_linear_init_mode,
                 norm_init_mode=self.norm_init_mode)
-            self.dec_final_proj = nn.Linear(dec_target_shape_list[-1][-1], C_out)
+            print("dec target shape list",dec_target_shape_list[-1][-1])
+            if self.season_float:
+                self.dec_final_proj = nn.Linear(dec_target_shape_list[-1][-1] + 2, C_out)  # +2 pour year et season
+            else:
+                self.dec_final_proj = nn.Linear(dec_target_shape_list[-1][-1], C_out)
+
             new_input_shape = self.initial_encoder.get_out_shape_list(self.input_shape)[-1]
         else:
             raise NotImplementedError
@@ -3165,8 +3176,7 @@ class CuboidTransformerModel(nn.Module):
             raise NotImplementedError
         return initial_z
 
-    def forward(self, x, verbose=False):
-        # x, year_float, season_float = batch 
+    def forward(self,x, year_float, season_float, verbose=False):
         B, _, _, _, _ = x.shape
         T_out, H_out, W_out, C_out = self.target_shape
         x = self.initial_encoder(x)
@@ -3189,12 +3199,20 @@ class CuboidTransformerModel(nn.Module):
         
         print("decoder", dec_out.shape)
         
-
         dec_out = self.final_decoder(dec_out)
         print("final decoder", dec_out.shape)
-        # ici idéalement je rajouterai le season float et le year float 
-        # concatenate float and dec_out
-        # dec_out = torch.concatenate((x.flatten(1), year_float, season_float), 1)
+
+        if self.season_float == True:
+            # Supposons que dec_out a la forme [B, T, H, W, C]
+            B, T, H, W, C = dec_out.shape
+            year_float = year_float.view(B, 1, 1, 1, 1).expand(B, T, H, W, 1)
+            season_float = season_float.view(B, 1, 1, 1, 1).expand(B, T, H, W, 1)
+            
+            # Concaténer le long de la dimension des canaux
+            dec_out = torch.cat([dec_out, year_float, season_float], dim=-1)
+            print("dec_out with year and season:", dec_out.shape)
+        
+        print("dec_final_proj:", self.dec_final_proj)
 
         out = self.dec_final_proj(dec_out)
         print(self.gamma)
