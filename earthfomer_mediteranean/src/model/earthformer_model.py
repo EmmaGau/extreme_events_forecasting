@@ -31,6 +31,7 @@ from torch.utils.data import DataLoader
 from utils.statistics import DataScaler
 from utils.temporal_aggregator import TemporalAggregatorFactory
 import time
+from torchmetrics import R2Score
 
 _curr_dir = os.path.realpath(os.path.dirname(os.path.realpath(__file__)))
 exps_dir = os.path.join(_curr_dir, "experiments")
@@ -57,7 +58,7 @@ class CuboidERAModule(pl.LightningModule):
         
         self.torch_nn_module = CuboidTransformerModel(
             season_float = self.season_float,
-            gamma = model_cfg["gamma"],
+            gaussian = False,
             input_shape= self.input_shape,
             target_shape= self.output_shape,
             base_units=model_cfg["base_units"],
@@ -136,9 +137,12 @@ class CuboidERAModule(pl.LightningModule):
 
         self.valid_mse = torchmetrics.MeanSquaredError()
         self.valid_mae = torchmetrics.MeanAbsoluteError()
+        self.valid_r2 = R2Score(num_outputs=self.output_shape[self.channel_axis-1], multioutput='uniform_average')
         self.test_mse = torchmetrics.MeanSquaredError()
         self.test_mae = torchmetrics.MeanAbsoluteError()
 
+        for i in range(self.output_shape[self.channel_axis-1]):
+            setattr(self, f'valid_r2_var_{i}', R2Score())
 
         for i in range(self.output_shape[self.channel_axis-1]):
             setattr(self, f'valid_mae_var_{i}', torchmetrics.MeanAbsoluteError())
@@ -356,6 +360,12 @@ class CuboidERAModule(pl.LightningModule):
                     mode="val", )
             self.valid_mse(pred_seq, target_seq)
             self.valid_mae(pred_seq, target_seq)
+            print("new shape",pred_seq.reshape(-1, pred_seq.shape[-1]).shape )
+            print("new shape target",target_seq.reshape(-1, target_seq.shape[-1]).shape )
+            self.valid_r2(pred_seq.view(-1, self.output_shape[self.channel_axis-1]), 
+              target_seq.view(-1, self.output_shape[self.channel_axis-1]))
+            for i in range(self.output_shape[self.channel_axis-1]):
+                getattr(self, f'valid_r2_var_{i}')(pred_seq[..., i].view(-1, 1), target_seq[..., i].view(-1, 1))
 
             # Calculer le skill score
             mse_model = F.mse_loss(pred_seq, target_seq)
@@ -377,11 +387,18 @@ class CuboidERAModule(pl.LightningModule):
     def on_validation_epoch_end(self):
         valid_mse = self.valid_mse.compute()
         valid_mae = self.valid_mae.compute()
+        valid_r2 = self.valid_r2.compute()
         valid_loss = self.trainer.callback_metrics['valid_loss']
         
         self.log('valid_mse_epoch', valid_mse, prog_bar=True, on_epoch=True, sync_dist=True)
         self.log('valid_mae_epoch', valid_mae, prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log('valid_r2_epoch', valid_r2, prog_bar=True, on_epoch=True, sync_dist=True)
         self.log('valid_loss_epoch', valid_loss, prog_bar=True, on_epoch=True, sync_dist=True)
+
+        for i in range(self.output_shape[self.channel_axis-1]):
+            r2_var = getattr(self, f'valid_r2_var_{i}').compute()
+            self.log(f'valid_r2_epoch_var_{i}', r2_var, prog_bar=True, on_epoch=True, sync_dist=True)
+            getattr(self, f'valid_r2_var_{i}').reset()
 
         for i in range(self.output_shape[self.channel_axis-1]):
             mae_var = getattr(self, f'valid_mae_var_{i}').compute()
@@ -390,6 +407,7 @@ class CuboidERAModule(pl.LightningModule):
         
         self.valid_mae.reset()
         self.valid_mse.reset()
+        self.valid_r2.reset()
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         micro_batch_size = batch[0].shape[self.batch_axis]

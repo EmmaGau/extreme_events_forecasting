@@ -121,8 +121,8 @@ class TemporalAggregator:
 
         return input_data, target_data, self.season_float, self.year_float, encoded_input_time_indexes, encoded_target_time_indexes
     
-    def decode_time_indexes(self, encoded_indexes):
-        return [self._decode_date(int(idx)) for idx in encoded_indexes]
+    def decode_time_indexes(self, encoded_indexes_array):
+        return [[self._decode_date(int(idx)) for idx in encoded_indexes_array[i]] for i in range(len(encoded_indexes_array))]
     
 class TemporalAggregatorFactory:
     def __init__(self, config):

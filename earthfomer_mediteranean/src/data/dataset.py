@@ -8,6 +8,7 @@ from utils.tools import AreaDataset
 from utils.enums import StackType, Resolution
 from utils.statistics import DataStatistics, DataScaler
 import wandb 
+import xclim
 
 class DatasetEra(Dataset):
     # TODO in statistics add if target is "pr" then do sum else do mean
@@ -48,7 +49,6 @@ class DatasetEra(Dataset):
 
         self.resolution_input = self.aggregator_factory.resolution_input
         self.resolution_output = self.aggregator_factory.resolution_output
-        self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months, coarse= self.scaler.coarse)
         self.data, self.target = self._load_and_prepare_data()
 
         self.aggregator = self.aggregator_factory.create_aggregator(self.data, self.target)
@@ -71,13 +71,19 @@ class DatasetEra(Dataset):
         self.relevant_years =  self.expand_year_range(ds_conf["relevant_years"])
         self.predict_sea_land= ds_conf["predict_sea_land"]
         self.out_spatial_resolution = ds_conf.get("out_spatial_resolution", 1.0)  # Default to 1.0 if not specified
-        self.scale_target = ds_conf.get("scale_target", True)
+        self.sum_pr = ds_conf.get("sum_pr", False)
         self.variables_tropics = ds_conf.get("variables_tropics", None)
     
     def _load_data(self, dir_path):
         """Load data from a specified directory using xarray."""
         ds = xr.open_dataset(dir_path, chunks = None)
         return ds
+    
+    def compute_climatology(self):
+        computer = DataStatistics(self.relevant_years, self.relevant_months, coarse=False)
+        clim = computer._get_stats(self.target_class)
+        return clim 
+
             
     def expand_year_range(self,year_range):
         if len(year_range) != 2:
@@ -113,7 +119,12 @@ class DatasetEra(Dataset):
         
         return reference_dataset, new_dataset
 
-    def process_scaling(self, data_class: AreaDataset):        
+    def process_scaling(self, data_class: AreaDataset):
+        if 
+        if data_class.is_target:
+            self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months, coarse=False, coarse_spatial=False)
+        else:
+            self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months, coarse= self.scaler.coarse)     
         # Compute statistics
         self.statistics = self.stat_computer._get_stats(data_class)
         # Apply scaling
@@ -175,7 +186,7 @@ class DatasetEra(Dataset):
         nh_data = self.process_scaling(self.nh_class) if self.nh_class is not None else None
         tropics_data = self.process_scaling(self.tropics_class) if self.tropics_class is not None else None
 
-        target = self.process_scaling(self.target_class) if self.scale_target else self.target_class.data
+        target = self.process_scaling(self.target_class)
         print(self.target_class.spatial_resolution)
 
         print("Data scaled")
@@ -196,7 +207,8 @@ class DatasetEra(Dataset):
             years=self.relevant_years,
             months=self.relevant_months,
             vars=variables,
-            target=self.target_variables
+            target=self.target_variables,
+            sum_pr = self.sum_pr,
         )
 
     def _remap_and_merge_data(self, med_data, nh_data, tropics_data):
@@ -230,7 +242,7 @@ class DatasetEra(Dataset):
         return data
 
     def get_binary_sea_mask(self):
-        mask = xr.open_dataset(self.mask_path)
+        mask = xr.open_dataset(self.mask_path, chunks = None)
         threshold = 0.3
         mask["lsm"] = xr.apply_ufunc(
             lambda x: (x > threshold).astype(int),
@@ -385,13 +397,14 @@ if __name__ == "__main__":
         'land_sea_mask': '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc',
         'spatial_resolution': 1,
         'predict_sea_land': False,
-        'out_spatial_resolution': 10,
-        'scale_target': False,
+        'out_spatial_resolution': 15,
+        'sum_pr': True,
         
     },
     'scaler': {
         'mode': 'standardize',
         'coarse': True,
+        ''
     },
     'temporal_aggregator': {
         'in_len': 3,
@@ -416,6 +429,8 @@ if __name__ == "__main__":
     dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
 
     sample = next(iter(dataloader))
+
+    train_dataset.compute_climatology()
     
 
     

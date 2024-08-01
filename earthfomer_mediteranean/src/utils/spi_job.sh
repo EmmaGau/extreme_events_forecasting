@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=spi_training
+#SBATCH --job-name=spi
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
@@ -39,4 +39,4 @@ echo "Python executable: $(which python)"
 
 # Exécutez le script
 python -c "import sys; print(sys.path)"
-python utils/spi.py 
+python utils/spi.py --window 14 --start_year 1940 --end_year 1990

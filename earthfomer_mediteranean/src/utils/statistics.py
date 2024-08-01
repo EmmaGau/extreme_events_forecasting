@@ -45,6 +45,11 @@ class DataScaler:
             dayofyear = data.time.dt.dayofyear
             return (data * statistics["std"].sel(dayofyear=dayofyear)) + statistics["mean"].sel(dayofyear=dayofyear)
 
+
+#  add an parameter that spatial coarse scaling
+# temporal zonal scaling as well 
+# essaye sur tout le northern hemisphere 
+# for the spatial : we do the mean over an area of grid point 
 class DataStatistics:
     def __init__(self, years: List[int], months: List[int], coarse: bool = False):
         self.years = years
@@ -64,6 +69,7 @@ class DataStatistics:
         area = data_class.area
         spatial_resolution = data_class.spatial_resolution
         temporal_resolution = data_class.temporal_resolution
+        sum_pr = data_class.sum_pr
 
         path_base = f"/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/statistics/"
         path_suffix = f"{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_{temporal_resolution}days"
@@ -71,6 +77,8 @@ class DataStatistics:
         # Ajouter 'coarse' au path si le mode coarse est activé
         if self.coarse:
             path_suffix += "_coarse"
+        if data_class.sum_pr:
+            path_suffix += "_sum_pr"
 
         paths = {
             "mean": f"{path_base}mean_{path_suffix}.nc",
@@ -131,6 +139,8 @@ class DataStatistics:
         # Ajouter 'coarse' au path si le mode coarse est activé
         if self.coarse:
             path_suffix += "_coarse"
+        if data_class.sum_pr:
+            path_suffix += "_sum_pr"
 
         for stat_name, stat_data in stats.items():
             path = f"{path_base}{stat_name}_{path_suffix}.nc"

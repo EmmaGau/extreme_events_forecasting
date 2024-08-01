@@ -6,7 +6,7 @@ from typing import List, Dict
 import numpy as np
 
 class AreaDataset:
-    def __init__(self, area: str, data: xr.Dataset, temporal_resolution: Dict[str, int], spatial_resolution: int, years: List[int], months: List[int], vars: List[str], target: str):
+    def __init__(self, area: str, data: xr.Dataset, temporal_resolution: Dict[str, int], spatial_resolution: int, years: List[int], months: List[int], vars: List[str], target: str, sum_pr : bool = False):
         self.area = area
         self.data = data
         self.spatial_resolution = spatial_resolution
@@ -15,6 +15,7 @@ class AreaDataset:
         self.months = months
         self.vars = vars
         self.target = target
+        self.sum_pr = sum_pr
 
         self._preprocess()
 
@@ -62,4 +63,11 @@ class AreaDataset:
     def change_spatial_resolution(self,spatial_resolution: int):
         if spatial_resolution != 1:
             regridded_data = self.data.coarsen(latitude=spatial_resolution, longitude=spatial_resolution, boundary="trim").mean()
-            self.data = regridded_data 
+            
+            if self.sum_pr:
+                # Pour 'tp', on effectue une somme
+                if 'tp' in self.data.variables:
+                    tp_sum = self.data['tp'].coarsen(latitude=spatial_resolution, longitude=spatial_resolution, boundary="trim").sum()
+                    regridded_data['tp'] = tp_sum
+        
+            self.data = regridded_data

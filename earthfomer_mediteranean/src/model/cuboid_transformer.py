@@ -2798,7 +2798,7 @@ class CuboidTransformerModel(nn.Module):
                  input_shape,
                  target_shape,
                  season_float = False,
-                 gamma=False,
+                 gaussian=False,
                  base_units=128,
                  block_units=None,
                  scale_alpha=1.0,
@@ -2893,7 +2893,7 @@ class CuboidTransformerModel(nn.Module):
         self.down_up_linear_init_mode = down_up_linear_init_mode
         self.norm_init_mode = norm_init_mode
 
-        self.gamma = gamma
+        self.gaussian = gaussian
         self.season_float = season_float
 
         assert len(enc_depth) == len(dec_depth)
@@ -3207,6 +3207,9 @@ class CuboidTransformerModel(nn.Module):
             B, T, H, W, C = dec_out.shape
             year_float = year_float.view(B, 1, 1, 1, 1).expand(B, T, H, W, 1)
             season_float = season_float.view(B, 1, 1, 1, 1).expand(B, T, H, W, 1)
+
+            # put everithing on the same device 
+            year_float, season_float = year_float.to(dec_out.device), season_float.to(dec_out.device)
             
             # Concaténer le long de la dimension des canaux
             dec_out = torch.cat([dec_out, year_float, season_float], dim=-1)
@@ -3215,9 +3218,9 @@ class CuboidTransformerModel(nn.Module):
         print("dec_final_proj:", self.dec_final_proj)
 
         out = self.dec_final_proj(dec_out)
-        print(self.gamma)
+        print(self.gaussian)
         eps = 1e-6
-        if self.gamma == True:
+        if self.gaussian == True:
             print("Avant exp - min:", out[..., 0:1].min().item(), "max:", out[..., 0:1].max().item())
             print("Avant exp - min:", out[..., 1:2].min().item(), "max:", out[..., 1:2].max().item())
             
