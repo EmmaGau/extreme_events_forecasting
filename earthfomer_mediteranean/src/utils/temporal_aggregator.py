@@ -62,7 +62,7 @@ class TemporalAggregator:
         return self.date_decoder[encoded_date]
         
     def _group_by_wet_season(self, data):
-        self.start_month = min(np.unique(data.time.dt.month.values))
+        self.start_month = 10
         data['wet_season_year']= data.time.dt.year*(data.time.dt.month>=self.start_month) + (data.time.dt.year-1)*(data.time.dt.month<self.start_month)
         grouped_data = data.groupby('wet_season_year')
         return grouped_data

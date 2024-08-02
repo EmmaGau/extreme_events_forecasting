@@ -51,10 +51,11 @@ class DataScaler:
 # essaye sur tout le northern hemisphere 
 # for the spatial : we do the mean over an area of grid point 
 class DataStatistics:
-    def __init__(self, years: List[int], months: List[int], coarse: bool = False):
+    def __init__(self, years: List[int], months: List[int], coarse: bool = False, coarse_spatial: bool = False):
         self.years = years
         self.months = months
         self.coarse = coarse
+        self.coarse_spatial = coarse_spatial
     
     def _get_years_months_str(self):
         years_range = f"{min(self.years)}-{max(self.years)}"
@@ -79,6 +80,8 @@ class DataStatistics:
             path_suffix += "_coarse"
         if data_class.sum_pr:
             path_suffix += "_sum_pr"
+        if self.coarse_spatial:
+            path_suffix += "_coarse_spatial"
 
         paths = {
             "mean": f"{path_base}mean_{path_suffix}.nc",
@@ -102,13 +105,21 @@ class DataStatistics:
         data = data.sel(time=data.time.dt.month.isin(self.months))
 
         if self.coarse:
-            # Calculer les statistiques sur tous les jours de toutes les années
-            stats = {
-                "mean": data.mean(dim='time'),
-                "std": data.std(dim='time'),
-                "min": data.min(dim='time'),
-                "max": data.max(dim='time')
-            }
+            if self.coarse_spatial:
+                stats = {
+                    "mean": data.mean(dim=['time', 'latitude', 'longitude']),
+                    "std": data.std(dim=['time', 'latitude', 'longitude']),
+                    "min": data.min(dim=['time', 'latitude', 'longitude']),
+                    "max": data.max(dim=['time', 'latitude', 'longitude'])
+                }
+            else: 
+                    # Calculer les statistiques sur tous les jours de toutes les années
+                stats = {
+                    "mean": data.mean(dim='time'),
+                    "std": data.std(dim='time'),
+                    "min": data.min(dim='time'),
+                    "max": data.max(dim='time')
+                }
         else:
             # Grouper par jour de l'année (ignorant l'année)
             grouped = data.groupby('time.dayofyear')
@@ -141,7 +152,8 @@ class DataStatistics:
             path_suffix += "_coarse"
         if data_class.sum_pr:
             path_suffix += "_sum_pr"
-
+        if self.coarse_spatial:
+            path_suffix += "_coarse_spatial"
         for stat_name, stat_data in stats.items():
             path = f"{path_base}{stat_name}_{path_suffix}.nc"
             stat_data.to_netcdf(path)
