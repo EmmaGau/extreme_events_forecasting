@@ -9,6 +9,7 @@ from utils.enums import StackType, Resolution
 from utils.statistics import DataStatistics, DataScaler
 import wandb 
 import xclim
+import re
 
 class DatasetEra(Dataset):
     # TODO in statistics add if target is "pr" then do sum else do mean
@@ -71,13 +72,15 @@ class DatasetEra(Dataset):
         self.relevant_years =  self.expand_year_range(ds_conf["relevant_years"])
         self.predict_sea_land= ds_conf["predict_sea_land"]
         self.out_spatial_resolution = ds_conf.get("out_spatial_resolution", 1.0)  # Default to 1.0 if not specified
-        self.sum_pr = ds_conf.get("sum_pr", False)
         self.variables_tropics = ds_conf.get("variables_tropics", None)
         self.coarse_spatial = ds_conf.get("coarse_spatial", False)
     
     def _load_data(self, dir_path):
         """Load data from a specified directory using xarray."""
         ds = xr.open_dataset(dir_path, chunks = None)
+        if '__xarray_dataarray_variable__' in ds.data_vars:
+            ds = ds.rename({'__xarray_dataarray_variable__': 'spi'})
+            print("Variable renamed to 'spi'.")
         return ds
     
     def compute_climatology(self):
@@ -120,6 +123,7 @@ class DatasetEra(Dataset):
         return reference_dataset, new_dataset
 
     def process_scaling(self, data_class: AreaDataset):
+        scale_all_vars = "spi" not in data_class.vars
         if self.coarse_spatial:
             if data_class.is_target:
                 self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months, coarse=False, coarse_spatial=False)
@@ -132,8 +136,16 @@ class DatasetEra(Dataset):
         # Compute statistics
         self.statistics = self.stat_computer._get_stats(data_class)
         # Apply scaling
-        standardized_data = self.scaler.transform(data_class.data, self.statistics)
-        return standardized_data
+        scaled_data = data_class.data.copy()
+    
+        for var in data_class.vars:
+            if scale_all_vars or var != "spi":
+                scaled_data[var] = self.scaler.transform(data_class.data, self.statistics, var)
+            else:
+                # Si la variable est 'spi', ne pas appliquer de redimensionnement
+                scaled_data[var] = data_class.data[var]
+
+        return scaled_data
 
     def _load_and_prepare_data(self):
         """Load data from directories for all variables and create big dataset that contains all variables for both regions
@@ -145,6 +157,14 @@ class DatasetEra(Dataset):
         # first check that dataset are aligned temporaly and spatially, and merge datasets
         for var in self.variables_med:
             med_data = self._load_data(self.data_dirs['mediteranean'][var])
+            if var == 'spi':
+                match = re.search(r'SPI_(.*?)_',self.data_dirs['mediteranean'][var])
+                if match:
+                    resolution = match.group(1)
+                else:
+                    raise ValueError("La résolution spatiale n'a pas été trouvée dans le chemin")
+                assert self.aggregator_factory.resolution_input == int(resolution), "La résolution spatiale du SPI ne correspond pas à la résolution d'entrée de l'agrégateur temporel"
+
             if med_datasets:
                 med_datasets[0], med_data = self.check_dataset(med_datasets[0], med_data, var)
                 # si y a des nan, print something et replace theme by 0 
@@ -186,6 +206,7 @@ class DatasetEra(Dataset):
         self.target_class = self._create_area_dataset("target", med_data[self.target_variables], self.target_variables, is_target=True)
 
         # Mise à l'échelle des données
+
         med_data = self.process_scaling(self.med_class)
         nh_data = self.process_scaling(self.nh_class) if self.nh_class is not None else None
         tropics_data = self.process_scaling(self.tropics_class) if self.tropics_class is not None else None
@@ -381,7 +402,7 @@ class DatasetEra(Dataset):
 
     
 if __name__ == "__main__":
-    data_dirs = {'mediteranean': {'tp':"/home/egauillard/data/PR_era5_MED_1degr_19400101_20240229_new.nc",
+    data_dirs = {'mediteranean': {'spi':"/home/egauillard/data/SPI_7_era5_MED_1degr_19400101_20240229_new.nc",
                                   't2m':"/home/egauillard/data/T2M_era5_MED_1degr_19400101-20240229.nc"},
                  
                  'north_hemisphere': {"stream": "/home/egauillard/data/STREAM250_era5_NHExt_1degr_19400101_20240229_new.nc",
@@ -394,8 +415,8 @@ if __name__ == "__main__":
     'dataset': {
         'variables_tropics': ["ttr"],
         'variables_nh': ["stream", "msl"],
-        'variables_med': ['tp', "t2m"],
-        'target_variables': ['tp'],
+        'variables_med': ['spi', "t2m"],
+        'target_variables': ['spi'],
         'relevant_years': [2000,2003],
         'relevant_months': [10,11,12,1,2,3],
         'scaling_years': [2000,2003],
