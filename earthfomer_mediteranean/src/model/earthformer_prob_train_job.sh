@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=gamma_earthformer_training
+#SBATCH --job-name=prob_earthformer_training
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
@@ -8,8 +8,8 @@
 #SBATCH --time=05:00:00
 #SBATCH --mem-per-cpu=9000
 
-#SBATCH --output=earthfomer_mediteranean/outputs_gamma/output-%j.out
-#SBATCH --error=earthfomer_mediteranean/outputs_gamma/error-%j.err
+#SBATCH --output=earthfomer_mediteranean/outputs_prob/output-%j.out
+#SBATCH --error=earthfomer_mediteranean/outputs_prob/error-%j.err
 
 
 #!/bin/bash
@@ -40,4 +40,4 @@ echo "Python executable: $(which python)"
 
 # Exécutez le script
 python -c "import sys; print(sys.path)"
-python model/earthformer_gamma.py --gpus 1
+python model/earthformer_prob_model.py --gpus 1

@@ -32,15 +32,18 @@ from utils.statistics import DataScaler
 from utils.temporal_aggregator import TemporalAggregatorFactory
 import time
 from torchmetrics import R2Score
+from torch.distributions import Normal
+
 
 _curr_dir = os.path.realpath(os.path.dirname(os.path.realpath(__file__)))
 exps_dir = os.path.join(_curr_dir, "experiments")
 pretrained_checkpoints_dir = cfg.pretrained_checkpoints_dir
 pytorch_state_dict_name = "earthformer_icarenso2021.pt"
 
-VAL_YEARS = [1999, 2010]
-TEST_YEARS = [2011, 2024]
+VAL_YEARS = [1991, 2009]
+TEST_YEARS = [2010, 2024]
 class CuboidERAModule(pl.LightningModule):
+
     def __init__(self,
                  total_num_steps: int,
                  config_file_path: str = "config.yaml",
@@ -57,7 +60,7 @@ class CuboidERAModule(pl.LightningModule):
         
         self.torch_nn_module = CuboidTransformerModel(
             season_float = self.season_float,
-            gaussian = False,
+            gaussian = True,
             input_shape= self.input_shape,
             target_shape= self.output_shape,
             base_units=model_cfg["base_units"],
@@ -144,19 +147,14 @@ class CuboidERAModule(pl.LightningModule):
         self.test_example_data_idx_list = list(oc.vis.test_example_data_idx_list)
         self.eval_example_only = oc.vis.eval_example_only
 
-        self.valid_mse = torchmetrics.MeanSquaredError()
-        self.valid_mae = torchmetrics.MeanAbsoluteError()
-        self.valid_r2 = R2Score(num_outputs=self.output_shape[self.channel_axis-1], multioutput='uniform_average')
-        self.test_mse = torchmetrics.MeanSquaredError()
-        self.test_mae = torchmetrics.MeanAbsoluteError()
-
-        for i in range(self.output_shape[self.channel_axis-1]):
-            setattr(self, f'valid_r2_var_{i}', R2Score())
-
-        for i in range(self.output_shape[self.channel_axis-1]):
-            setattr(self, f'valid_mae_var_{i}', torchmetrics.MeanAbsoluteError())
-
         self.configure_save(cfg_file_path=config_file_path)
+        self.valid_crps = torchmetrics.MeanMetric()
+        self.valid_nll = torchmetrics.MeanMetric()
+
+        self.valid_crps_var = {} 
+
+        for i in range(self.output_shape[self.channel_axis-1]):
+            setattr(self, f'valid_crps_var_{i}',torchmetrics.MeanMetric())
 
     def configure_save(self, cfg_file_path=None):
         self.save_dir = os.path.join(exps_dir, self.save_dir)
@@ -214,32 +212,19 @@ class CuboidERAModule(pl.LightningModule):
         r"""
         Default kwargs used when initializing pl.Trainer
         """
-        # Checkpoint callback for valid_loss_epoch
-        checkpoint_callback_loss = ModelCheckpoint(
+        checkpoint_callback = ModelCheckpoint(
             monitor="valid_loss_epoch",
-            dirpath=os.path.join(self.save_dir, "checkpoints", "loss"),
-            filename="model-loss-{epoch:03d}",
+            dirpath=os.path.join(self.save_dir, "checkpoints"),
+            filename="model-{epoch:03d}",
             save_top_k=self.oc.optim.save_top_k,
             save_last=True,
             mode="min",
         )
-
-        # Checkpoint callback for valid_skill_score
-        checkpoint_callback_skill = ModelCheckpoint(
-            monitor="valid_skill_score",
-            dirpath=os.path.join(self.save_dir, "checkpoints", "skill"),
-            filename="model-skill-{epoch:03d}-{valid_skill_score:.2f}",
-            save_top_k=self.oc.optim.save_top_k,
-            save_last=True,
-            mode="max",
-        )
-
-        # Collect callbacks from kwargs and add our checkpoint callbacks
         callbacks = kwargs.pop("callbacks", [])
         assert isinstance(callbacks, list)
         for ele in callbacks:
             assert isinstance(ele, Callback)
-        callbacks += [checkpoint_callback_loss, checkpoint_callback_skill]
+        callbacks += [checkpoint_callback, ]
         if self.oc.logging.monitor_lr:
             callbacks += [LearningRateMonitor(logging_interval='step'), ]
         if self.oc.logging.monitor_device:
@@ -329,28 +314,37 @@ class CuboidERAModule(pl.LightningModule):
         test_dataloader = DataLoader(test_dataset, batch_size=micro_batch_size, shuffle=False, num_workers=4)
         
         return train_dataloader, val_dataloader, test_dataloader
+    
+    def gaussian_nll_loss(self, mu, sigma, target):
+        distribution = Normal(mu, sigma)
+        return -distribution.log_prob(target).mean()
+
+    def crps_loss(self, mu, sigma, target):
+        std_normal = Normal(0, 1)
+        normalized_diff = (target - mu) / sigma
+        return (sigma * (normalized_diff * (2 * std_normal.cdf(normalized_diff) - 1) + 
+                2 * std_normal.log_prob(normalized_diff).exp() - 1 / torch.sqrt(torch.tensor(torch.pi)))).mean()
 
 
     def forward(self, batch):
         input, target, season_float, year_float, *_ = batch
-        input = input.float() # (N, in_len, lat, lon, nb_target)
-        target = target.float()# (N, in_len, lat, lon, nb_target)
+        input = input.float()  # (B, T, H, W, C)
+        target = target.float()  # (B, T, H, W, C)
         season_float = season_float.float()
         year_float = year_float.float()
-        pred_seq = self.torch_nn_module(input, season_float, year_float)
-        print(pred_seq.shape, target.shape)
-        loss = F.mse_loss(pred_seq, target)
-        return pred_seq, loss, input, target
+        output = self.torch_nn_module(input, season_float, year_float)  # (B, T, H, W, C, 2)
+        
+        mu, sigma = output[..., 0], output[..., 1]
+        print('mu', mu.shape)
+        print('sigma', sigma.shape)
+        print('target', target.shape)
+        loss = self.gaussian_nll_loss(mu, sigma, target)
+        print('loss', loss)
+        return mu, sigma, loss, input, target
 
     def training_step(self, batch, batch_idx):
-        pred_seq, loss, input, target = self(batch)
-         # Calculer la MSE pour chaque variable
-        mse_per_var = F.mse_loss(pred_seq, target, reduction='none').mean(dim=(0, 1, 2, 3))
+        mu, sigma, loss, input, target = self(batch)
     
-        # Logguer la loss pour chaque variable
-        for i, mse in enumerate(mse_per_var):
-            self.log(f'train_loss_var_{i}', mse, on_step=False, on_epoch=True)
-
         micro_batch_size = input.shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
         if self.local_rank == 0:
@@ -358,7 +352,7 @@ class CuboidERAModule(pl.LightningModule):
                 data_idx=data_idx,
                 context_seq=input.detach().float().cpu().numpy(),
                 target_seq=target.detach().float().cpu().numpy(),
-                pred_seq=pred_seq.detach().float().cpu().numpy(),
+                pred_seq=mu.detach().float().cpu().numpy(),
                 mode="train", )
         self.log('train_loss', loss, on_step=False, on_epoch=True)
         return loss
@@ -367,69 +361,58 @@ class CuboidERAModule(pl.LightningModule):
         micro_batch_size = batch[0].shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
         if not self.eval_example_only or data_idx in self.val_example_data_idx_list:
-            pred_seq, loss, in_seq, target_seq= self(batch)
-            # Calculer le MAE pour chaque variable
-            mae_per_var = torch.abs(pred_seq - target_seq).mean(dim=(0, 1, 2, 3))
-            for i, mae in enumerate(mae_per_var):
-                getattr(self, f'valid_mae_var_{i}')(pred_seq[..., i], target_seq[..., i])
-    
+            mu, sigma, loss, in_seq, target_seq = self(batch)
+            print("mu shape:", mu.shape)
+            print("sigma shape:", sigma.shape)
+            print("target_seq shape:", target_seq.shape)
+
+            crps_per_var = [self.crps_loss(mu[..., i], sigma[..., i], target_seq[..., i]).mean() for i in range(mu.shape[-1])]
+            for i, crps in enumerate(crps_per_var):
+                self.log(f'valid_crps_var_{i}', crps, on_step=False, on_epoch=True)
+
             if self.local_rank == 0:
                 self.save_vis_step_end(
                     data_idx=data_idx,
                     context_seq=in_seq.detach().float().cpu().numpy(),
                     target_seq=target_seq.detach().float().cpu().numpy(),
-                    pred_seq=pred_seq.detach().float().cpu().numpy(),
+                    pred_seq=mu.detach().float().cpu().numpy(),
                     mode="val", )
-            self.valid_mse(pred_seq, target_seq)
-            self.valid_mae(pred_seq, target_seq)
-            print("new shape",pred_seq.reshape(-1, pred_seq.shape[-1]).shape )
-            print("new shape target",target_seq.reshape(-1, target_seq.shape[-1]).shape )
-            self.valid_r2(pred_seq.view(-1, self.output_shape[self.channel_axis-1]), 
-              target_seq.view(-1, self.output_shape[self.channel_axis-1]))
-            for i in range(self.output_shape[self.channel_axis-1]):
-                getattr(self, f'valid_r2_var_{i}')(pred_seq[..., i].view(-1, 1), target_seq[..., i].view(-1, 1))
-
-            # Calculer le skill score
-            mse_model = F.mse_loss(pred_seq, target_seq)
-            mse_climatology = torch.mean(target_seq**2)  # Climatologie prédit 0
-            skill_score = 1 - (mse_model / mse_climatology)
-            num_variables = pred_seq.shape[-1]
-            for i in range(num_variables):
-                mse_model_i = F.mse_loss(pred_seq[..., i], target_seq[..., i])
-                mse_climatology_i = torch.mean(target_seq[..., i]**2)
-                skill_score_i = 1 - (mse_model_i / mse_climatology_i)
+            
+            self.valid_crps(self.crps_loss(mu, sigma, target_seq).mean())
+            self.valid_nll(self.gaussian_nll_loss(mu, sigma, target_seq).mean())
+            
+            # Calculate skill score using CRPS
+            crps_model = self.crps_loss(mu, sigma, target_seq).mean()
+            crps_climatology = self.crps_loss(target_seq.mean(), target_seq.std(), target_seq).mean()
+            skill_score = 1 - (crps_model / crps_climatology)
+            
+            for i in range(mu.shape[-1]):
+                crps_model_i = self.crps_loss(mu[..., i], sigma[..., i], target_seq[..., i]).mean()
+                crps_climatology_i = self.crps_loss(target_seq[..., i].mean(), target_seq[..., i].std(), target_seq[..., i]).mean()
+                skill_score_i = 1 - (crps_model_i / crps_climatology_i)
                 self.log(f'valid_skill_score_var_{i}', skill_score_i, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
-            
             self.log('valid_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
             self.log('valid_skill_score', skill_score, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         
         return {'loss': loss}
 
     def on_validation_epoch_end(self):
-        valid_mse = self.valid_mse.compute()
-        valid_mae = self.valid_mae.compute()
-        valid_r2 = self.valid_r2.compute()
+        valid_crps = self.valid_crps.compute()
+        valid_nll = self.valid_nll.compute()
         valid_loss = self.trainer.callback_metrics['valid_loss']
         
-        self.log('valid_mse_epoch', valid_mse, prog_bar=True, on_epoch=True, sync_dist=True)
-        self.log('valid_mae_epoch', valid_mae, prog_bar=True, on_epoch=True, sync_dist=True)
-        self.log('valid_r2_epoch', valid_r2, prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log('valid_crps_epoch', valid_crps, prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log('valid_nll_epoch', valid_nll, prog_bar=True, on_epoch=True, sync_dist=True)
         self.log('valid_loss_epoch', valid_loss, prog_bar=True, on_epoch=True, sync_dist=True)
 
         for i in range(self.output_shape[self.channel_axis-1]):
-            r2_var = getattr(self, f'valid_r2_var_{i}').compute()
-            self.log(f'valid_r2_epoch_var_{i}', r2_var, prog_bar=True, on_epoch=True, sync_dist=True)
-            getattr(self, f'valid_r2_var_{i}').reset()
-
-        for i in range(self.output_shape[self.channel_axis-1]):
-            mae_var = getattr(self, f'valid_mae_var_{i}').compute()
-            self.log(f'valid_mae_epoch_var_{i}', mae_var, prog_bar=True, on_epoch=True, sync_dist=True)
-            getattr(self, f'valid_mae_var_{i}').reset()
+            crps_var = getattr(self, f'valid_crps_var_{i}').compute()
+            self.log(f'valid_crps_epoch_var_{i}', crps_var, prog_bar=True, on_epoch=True, sync_dist=True)
+            getattr(self, f'valid_crps_var_{i}').reset()
         
-        self.valid_mae.reset()
-        self.valid_mse.reset()
-        self.valid_r2.reset()
+        self.valid_crps.reset()
+        self.valid_nll.reset()
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         micro_batch_size = batch[0].shape[self.batch_axis]
@@ -507,7 +490,7 @@ def main():
     args = parser.parse_args()
 
     if args.cfg is None:
-        args.cfg = "/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/configs/earthformer_default.yaml"
+        args.cfg = "/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/configs/earthformer_gamma_default.yaml"
     
     oc_from_file = OmegaConf.load(open(args.cfg, "r"))
     dataset_cfg = OmegaConf.to_object(oc_from_file.data)

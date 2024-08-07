@@ -36,9 +36,19 @@ class Evaluation:
         return self.scaler.inverse_transform(data, self.statistics)
 
     def create_save_folder(self):
-        exp_dir = os.path.dirname(os.path.dirname(self.checkpoint_path))
+        checkpoint_dir, _ = os.path.split(self.checkpoint_path)
+
+        if '/checkpoints/' in checkpoint_dir:
+            exp_dir = checkpoint_dir.split('/checkpoints/')[0]
+            print(f"Checkpoints found in path. Experiment directory: {exp_dir}")
+        else:
+            # Handle the case where 'checkpoints' is not in the path (fallback for older structure)
+            exp_dir = os.path.dirname(os.path.dirname(self.checkpoint_path))
+            print(f"Checkpoints not found in path. Fallback experiment directory: {exp_dir}")
+
         save_folder = os.path.join(exp_dir, 'inference_plots')
         os.makedirs(save_folder, exist_ok=True)
+        print(f"Save folder created at: {save_folder}")
         return save_folder
 
     def load_model(self):
@@ -314,9 +324,6 @@ class Evaluation:
             plt.savefig(os.path.join(self.save_folder, f'{var}mse_comparison.png'), dpi=300, bbox_inches='tight')
             plt.close()
 
-
-    
-
     def calculate_spatial_mse(self):
         self.spatial_mse = {}
         self.spatial_relative_mse = {}
@@ -435,7 +442,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     checkpoint_path = args.checkpoint_path
-    config_path = os.path.join(os.path.dirname(os.path.dirname(checkpoint_path)), 'cfg.yaml')
+    exp_dir = checkpoint_path.split('/checkpoints/')[0]
+    print(f"Experiment directory: {exp_dir}")
+    config_path = os.path.join(exp_dir, 'cfg.yaml')
 
     oc = OmegaConf.load(config_path)
     dataset_cfg = OmegaConf.to_object(oc.data)

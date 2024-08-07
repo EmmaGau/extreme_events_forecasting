@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=earthformer_training
+#SBATCH --job-name=spi_earth
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
@@ -8,14 +8,14 @@
 #SBATCH --time=48:00:00
 #SBATCH --mem-per-cpu=9000
 
-#SBATCH --output=earthfomer_mediteranean/src/outputs/output-%j.out
-#SBATCH --error=earthfomer_mediteranean/src/outputs/error-%j.err
+#SBATCH --output=earthfomer_mediteranean_spi/src/outputs/output-%j.out
+#SBATCH --error=earthfomer_mediteranean_spi/src/outputs/error-%j.err
 
 #!/bin/bash
 
 # Chemins absolus
 HOME_DIR="/gpfs/home3/egauillard"
-PROJECT_PATH="$HOME_DIR/extreme_events_forecasting/earthfomer_mediteranean"
+PROJECT_PATH="$HOME_DIR/extreme_events_forecasting/earthfomer_mediteranean_spi"
 ENV_PATH="$HOME_DIR/extreme_events_forecasting/extreme_events_env"
 
 # Chargez les modules

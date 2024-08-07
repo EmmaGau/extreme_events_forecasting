@@ -20,40 +20,47 @@ from earthformer.config import cfg
 from earthformer.utils.optim import SequentialLR, warmup_lambda
 from earthformer.utils.utils import get_parameter_names
 from model.cuboid_transformer import CuboidTransformerModel
+from earthformer.datasets.enso.enso_dataloader import ENSOLightningDataModule, NINO_WINDOW_T
 from copy import deepcopy
+import wandb
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from data.dataset import DatasetEra
 from torch.utils.data import DataLoader
-from utils.scaler import DataScaler
+from utils.statistics import DataScaler
 from utils.temporal_aggregator import TemporalAggregatorFactory
 import time
-from scipy.special import gamma
-import torch.distributions as dist
+from torchmetrics import R2Score
 
 _curr_dir = os.path.realpath(os.path.dirname(os.path.realpath(__file__)))
 exps_dir = os.path.join(_curr_dir, "experiments")
 pretrained_checkpoints_dir = cfg.pretrained_checkpoints_dir
 pytorch_state_dict_name = "earthformer_icarenso2021.pt"
 
-VAL_YEARS = [1990, 2009]
-TEST_YEARS = [2009, 2024]
+VAL_YEARS = [1999, 2010]
+TEST_YEARS = [2011, 2024]
 class CuboidERAModule(pl.LightningModule):
 
     def __init__(self,
                  total_num_steps: int,
                  config_file_path: str = "config.yaml",
-                 save_dir: str = None):
+                 save_dir: str = None,
+                 input_shape: Sequence[int] = None,
+                 output_shape: Sequence[int]= None,):
         super(CuboidERAModule, self).__init__()
         oc = OmegaConf.load(open(config_file_path))
         model_cfg = OmegaConf.to_object(oc.model)
         num_blocks = len(model_cfg["enc_depth"])
+        self.input_shape = input_shape if input_shape is not None else model_cfg["input_shape"]
+        self.output_shape = output_shape if output_shape is not None else model_cfg["target_shape"]
+        self.season_float = model_cfg["season_float"] if "season_float" in model_cfg else False
         
         self.torch_nn_module = CuboidTransformerModel(
-            gamma = model_cfg["gamma"],
-            input_shape=model_cfg["input_shape"],
-            target_shape=model_cfg["target_shape"],
+            season_float = self.season_float,
+            gaussian = False,
+            input_shape= self.input_shape,
+            target_shape= self.output_shape,
             base_units=model_cfg["base_units"],
             block_units=model_cfg["block_units"],
             scale_alpha=model_cfg["scale_alpha"],
@@ -77,6 +84,8 @@ class CuboidERAModule(pl.LightningModule):
             ffn_activation=model_cfg["ffn_activation"],
             gated_ffn=model_cfg["gated_ffn"],
             norm_layer=model_cfg["norm_layer"],
+
+             # global vectors
             num_global_vectors=model_cfg["num_global_vectors"],
             use_dec_self_global=model_cfg["use_dec_self_global"],
             dec_self_update_global=model_cfg["dec_self_update_global"],
@@ -85,34 +94,43 @@ class CuboidERAModule(pl.LightningModule):
             use_global_self_attn=model_cfg["use_global_self_attn"],
             separate_global_qkv=model_cfg["separate_global_qkv"],
             global_dim_ratio=model_cfg["global_dim_ratio"],
+            # initial_downsample
             initial_downsample_type=model_cfg["initial_downsample_type"],
             initial_downsample_activation=model_cfg["initial_downsample_activation"],
             initial_downsample_scale=model_cfg["initial_downsample_scale"],
             initial_downsample_conv_layers=model_cfg["initial_downsample_conv_layers"],
             final_upsample_conv_layers=model_cfg["final_upsample_conv_layers"],
+            # initial_downsample_type=="stack_conv"
+            initial_downsample_stack_conv_num_layers= model_cfg.get("initial_downsample_stack_conv_num_layers", 3),
+            initial_downsample_stack_conv_dim_list= model_cfg.get("initial_downsample_stack_conv_dim_list", [16, 64, 128]),
+            initial_downsample_stack_conv_downscale_list= model_cfg.get("initial_downsample_stack_conv_downscale_list", [3, 2, 2]),
+            initial_downsample_stack_conv_num_conv_list= model_cfg.get("initial_downsample_stack_conv_num_conv_list", [2, 2, 2]),
+            # misc
             padding_type=model_cfg["padding_type"],
             z_init_method=model_cfg["z_init_method"],
             checkpoint_level=model_cfg["checkpoint_level"],
             pos_embed_type=model_cfg["pos_embed_type"],
             use_relative_pos=model_cfg["use_relative_pos"],
             self_attn_use_final_proj=model_cfg["self_attn_use_final_proj"],
+            # initialization
             attn_linear_init_mode=model_cfg["attn_linear_init_mode"],
             ffn_linear_init_mode=model_cfg["ffn_linear_init_mode"],
             conv_init_mode=model_cfg["conv_init_mode"],
             down_up_linear_init_mode=model_cfg["down_up_linear_init_mode"],
-            norm_init_mode=model_cfg["norm_init_mode"],
+            norm_init_mode=model_cfg["norm_init_mode"],  
         )
 
         self.total_num_steps = total_num_steps
         self.save_hyperparameters(oc)
         self.oc = oc
         self.dataset_config = oc.data
-        self.in_len = oc.layout.in_len
-        self.out_len = oc.layout.out_len
         self.layout = oc.layout.layout
         self.channel_axis = self.layout.find("C")
+        print("channel axis", self.channel_axis)
         self.batch_axis = self.layout.find("N")
-        self.channels = model_cfg["data_channels"]
+        print("input_shape",input_shape)
+        print("output_shape", output_shape)
+        self.channels = self.input_shape[self.channel_axis-1]
         self.max_epochs = oc.optim.max_epochs
         self.optim_method = oc.optim.method
         self.lr = oc.optim.lr
@@ -127,7 +145,17 @@ class CuboidERAModule(pl.LightningModule):
         self.test_example_data_idx_list = list(oc.vis.test_example_data_idx_list)
         self.eval_example_only = oc.vis.eval_example_only
 
-        
+        self.valid_mse = torchmetrics.MeanSquaredError()
+        self.valid_mae = torchmetrics.MeanAbsoluteError()
+        self.valid_r2 = R2Score(num_outputs=self.output_shape[self.channel_axis-1], multioutput='uniform_average')
+        self.test_mse = torchmetrics.MeanSquaredError()
+        self.test_mae = torchmetrics.MeanAbsoluteError()
+
+        for i in range(self.output_shape[self.channel_axis-1]):
+            setattr(self, f'valid_r2_var_{i}', R2Score())
+
+        for i in range(self.output_shape[self.channel_axis-1]):
+            setattr(self, f'valid_mae_var_{i}', torchmetrics.MeanAbsoluteError())
 
         self.configure_save(cfg_file_path=config_file_path)
 
@@ -187,19 +215,32 @@ class CuboidERAModule(pl.LightningModule):
         r"""
         Default kwargs used when initializing pl.Trainer
         """
-        checkpoint_callback = ModelCheckpoint(
+        # Checkpoint callback for valid_loss_epoch
+        checkpoint_callback_loss = ModelCheckpoint(
             monitor="valid_loss_epoch",
-            dirpath=os.path.join(self.save_dir, "checkpoints"),
-            filename="model-{epoch:03d}",
+            dirpath=os.path.join(self.save_dir, "checkpoints", "loss"),
+            filename="model-loss-{epoch:03d}",
             save_top_k=self.oc.optim.save_top_k,
             save_last=True,
             mode="min",
         )
+
+        # Checkpoint callback for valid_skill_score
+        checkpoint_callback_skill = ModelCheckpoint(
+            monitor="valid_skill_score",
+            dirpath=os.path.join(self.save_dir, "checkpoints", "skill"),
+            filename="model-skill-{epoch:03d}-{valid_skill_score:.2f}",
+            save_top_k=self.oc.optim.save_top_k,
+            save_last=True,
+            mode="max",
+        )
+
+        # Collect callbacks from kwargs and add our checkpoint callbacks
         callbacks = kwargs.pop("callbacks", [])
         assert isinstance(callbacks, list)
         for ele in callbacks:
             assert isinstance(ele, Callback)
-        callbacks += [checkpoint_callback, ]
+        callbacks += [checkpoint_callback_loss, checkpoint_callback_skill]
         if self.oc.logging.monitor_lr:
             callbacks += [LearningRateMonitor(logging_interval='step'), ]
         if self.oc.logging.monitor_device:
@@ -242,7 +283,7 @@ class CuboidERAModule(pl.LightningModule):
         ret.update(oc_trainer_kwargs)
         ret.update(kwargs)
         return ret
-    
+
     @classmethod
     def get_total_num_steps(
             cls,
@@ -290,25 +331,27 @@ class CuboidERAModule(pl.LightningModule):
         
         return train_dataloader, val_dataloader, test_dataloader
 
-    
 
     def forward(self, batch):
-        input, target = batch
-        input = input.float() # (N, in_len, lat, lon, 1)
-        target = target.float()# (N, in_len, lat, lon, 1)
-        print("validation step")
-
-        print('torch_shape',self.torch_nn_module(input).shape)
-        output = self.torch_nn_module(input)
-        print("zeros in target" , (target == 0).sum())
-        print("min input", target.min() )
-        print("min output", output.min())
-        alpha, beta = output[..., 0].unsqueeze(-1), output[..., 1].unsqueeze(-1)
-        loss = - dist.Gamma(alpha, beta).log_prob(target).mean()
-        return alpha, beta, loss, input, target
+        input, target, season_float, year_float, *_ = batch
+        input = input.float() # (N, in_len, lat, lon, nb_target)
+        target = target.float()# (N, in_len, lat, lon, nb_target)
+        season_float = season_float.float()
+        year_float = year_float.float()
+        pred_seq = self.torch_nn_module(input, season_float, year_float)
+        print(pred_seq.shape, target.shape)
+        loss = F.mse_loss(pred_seq, target)
+        return pred_seq, loss, input, target
 
     def training_step(self, batch, batch_idx):
-        alpha, beta, loss, input, target = self(batch)
+        pred_seq, loss, input, target = self(batch)
+         # Calculer la MSE pour chaque variable
+        mse_per_var = F.mse_loss(pred_seq, target, reduction='none').mean(dim=(0, 1, 2, 3))
+    
+        # Logguer la loss pour chaque variable
+        for i, mse in enumerate(mse_per_var):
+            self.log(f'train_loss_var_{i}', mse, on_step=False, on_epoch=True)
+
         micro_batch_size = input.shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
         if self.local_rank == 0:
@@ -316,105 +359,111 @@ class CuboidERAModule(pl.LightningModule):
                 data_idx=data_idx,
                 context_seq=input.detach().float().cpu().numpy(),
                 target_seq=target.detach().float().cpu().numpy(),
-                alpha=alpha.detach().float().cpu().numpy(),
-                beta=beta.detach().float().cpu().numpy(),
+                pred_seq=pred_seq.detach().float().cpu().numpy(),
                 mode="train", )
-        self.log('train_loss', loss, on_step=True, on_epoch=False)
+        self.log('train_loss', loss, on_step=False, on_epoch=True)
         return loss
-    
-    def gamma_crps(self, shape, scale, y_true):
-        """
-        Compute the CRPS for a Gamma distribution using PyTorch.
-
-        Parameters:
-        y_true (torch.Tensor): The observed values.
-        shape (torch.Tensor): The shape parameter of the Gamma distribution.
-        scale (torch.Tensor): The scale parameter of the Gamma distribution.
-
-        Returns:
-        torch.Tensor: The CRPS score.
-        """
-        gamma_dist = dist.Gamma(shape, scale)
-        
-        def gamma_cdf(x, gamma_dist):
-            return gamma_dist.cdf(x)
-        
-        def integrand(x, gamma_dist, y_true):
-            F_x = gamma_cdf(x, gamma_dist)
-            return (F_x - (x >= y_true).float()) ** 2
-        
-        #TODO change x_values to be more appropriate
-        x_values = torch.linspace(0, 10 * y_true.max(), 1000)  # Adjust as necessary
-        integrand_values = integrand(x_values[:, None], gamma_dist, y_true)
-        crps = torch.trapz(integrand_values, x_values, dim=0)
-        
-        return crps.mean()
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
-        print("validation step")
         micro_batch_size = batch[0].shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
         if not self.eval_example_only or data_idx in self.val_example_data_idx_list:
-
-            alpha, beta, loss, input, target = self(batch)
-            
-            # Calculate CRPS for Gamma distribution
-            print("compute gamma distribution")
-            crps = self.gamma_crps(alpha, beta, target)
-            
+            pred_seq, loss, in_seq, target_seq= self(batch)
+            # Calculer le MAE pour chaque variable
+            mae_per_var = torch.abs(pred_seq - target_seq).mean(dim=(0, 1, 2, 3))
+            for i, mae in enumerate(mae_per_var):
+                getattr(self, f'valid_mae_var_{i}')(pred_seq[..., i], target_seq[..., i])
+    
             if self.local_rank == 0:
                 self.save_vis_step_end(
                     data_idx=data_idx,
-                    context_seq=input.detach().float().cpu().numpy(),
-                    target_seq=target.detach().float().cpu().numpy(),
-                    alpha=alpha.detach().float().cpu().numpy(),
-                    beta=beta.detach().float().cpu().numpy(),
-                    mode="val")
-            
-            self.log('valid_crps', crps, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-            self.log('valid_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-        
-        return {'crps': crps, 'loss': loss}
+                    context_seq=in_seq.detach().float().cpu().numpy(),
+                    target_seq=target_seq.detach().float().cpu().numpy(),
+                    pred_seq=pred_seq.detach().float().cpu().numpy(),
+                    mode="val", )
+            self.valid_mse(pred_seq, target_seq)
+            self.valid_mae(pred_seq, target_seq)
+            print("new shape",pred_seq.reshape(-1, pred_seq.shape[-1]).shape )
+            print("new shape target",target_seq.reshape(-1, target_seq.shape[-1]).shape )
+            self.valid_r2(pred_seq.view(-1, self.output_shape[self.channel_axis-1]), 
+              target_seq.view(-1, self.output_shape[self.channel_axis-1]))
+            for i in range(self.output_shape[self.channel_axis-1]):
+                getattr(self, f'valid_r2_var_{i}')(pred_seq[..., i].view(-1, 1), target_seq[..., i].view(-1, 1))
 
+            # Calculer le skill score
+            mse_model = F.mse_loss(pred_seq, target_seq)
+            mse_climatology = torch.mean(target_seq**2)  # Climatologie prédit 0
+            skill_score = 1 - (mse_model / mse_climatology)
+            num_variables = pred_seq.shape[-1]
+            for i in range(num_variables):
+                mse_model_i = F.mse_loss(pred_seq[..., i], target_seq[..., i])
+                mse_climatology_i = torch.mean(target_seq[..., i]**2)
+                skill_score_i = 1 - (mse_model_i / mse_climatology_i)
+                self.log(f'valid_skill_score_var_{i}', skill_score_i, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
+            
+            self.log('valid_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+            self.log('valid_skill_score', skill_score, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        
+        return {'loss': loss}
+
+    def on_validation_epoch_end(self):
+        valid_mse = self.valid_mse.compute()
+        valid_mae = self.valid_mae.compute()
+        valid_r2 = self.valid_r2.compute()
+        valid_loss = self.trainer.callback_metrics['valid_loss']
+        
+        self.log('valid_mse_epoch', valid_mse, prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log('valid_mae_epoch', valid_mae, prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log('valid_r2_epoch', valid_r2, prog_bar=True, on_epoch=True, sync_dist=True)
+        self.log('valid_loss_epoch', valid_loss, prog_bar=True, on_epoch=True, sync_dist=True)
+
+        for i in range(self.output_shape[self.channel_axis-1]):
+            r2_var = getattr(self, f'valid_r2_var_{i}').compute()
+            self.log(f'valid_r2_epoch_var_{i}', r2_var, prog_bar=True, on_epoch=True, sync_dist=True)
+            getattr(self, f'valid_r2_var_{i}').reset()
+
+        for i in range(self.output_shape[self.channel_axis-1]):
+            mae_var = getattr(self, f'valid_mae_var_{i}').compute()
+            self.log(f'valid_mae_epoch_var_{i}', mae_var, prog_bar=True, on_epoch=True, sync_dist=True)
+            getattr(self, f'valid_mae_var_{i}').reset()
+        
+        self.valid_mae.reset()
+        self.valid_mse.reset()
+        self.valid_r2.reset()
 
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         micro_batch_size = batch[0].shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
         if not self.eval_example_only or data_idx in self.test_example_data_idx_list:
-            alpha, beta, loss, input, target = self(batch)
-            
-            # Calculate CRPS for Gamma distribution
-            print("compute gamma distribution")
-            crps = self.gamma_crps(alpha, beta, target)
-            
+            pred_seq, loss, in_seq, target_seq = self(batch)
             if self.local_rank == 0:
                 self.save_vis_step_end(
                     data_idx=data_idx,
-                    context_seq=input.detach().float().cpu().numpy(),
-                    target_seq=target.detach().float().cpu().numpy(),
-                    alpha=alpha.detach().float().cpu().numpy(),
-                    beta=beta.detach().float().cpu().numpy(),
-                    mode="test")
-            
-            self.log('test_crps', crps, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-            self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
-        
-        return {'crps': crps, 'loss': loss}
-
+                    context_seq=in_seq.detach().float().cpu().numpy(),
+                    target_seq=target_seq.detach().float().cpu().numpy(),
+                    pred_seq=pred_seq.detach().float().cpu().numpy(),
+                    mode="test", )
+            if self.precision == 16:
+                pred_seq = pred_seq.float()
+            self.test_mse(pred_seq, target_seq)
+            self.test_mae(pred_seq, target_seq)
 
     def test_epoch_end(self, outputs):
-        test_crps = self.trainer.callback_metrics['test_crps']
-        test_loss = self.trainer.callback_metrics['test_loss']
-        self.log('test_crps_epoch', test_crps, prog_bar=True, on_epoch=True, sync_dist=True)
-        self.log('test_loss_epoch', test_loss, prog_bar=True, on_epoch=True, sync_dist=True)
+        test_mse = self.test_mse.compute()
+        test_mae = self.test_mae.compute()
+
+        self.log('test_mse_epoch', test_mse, prog_bar=True, on_step=False, on_epoch=True)
+        self.log('test_mae_epoch', test_mae, prog_bar=True, on_step=False, on_epoch=True)
+        self.test_mse.reset()
+        self.test_mae.reset()
 
     def save_vis_step_end(
             self,
             data_idx: int,
             context_seq: np.ndarray,
             target_seq: np.ndarray,
-            alpha: np.ndarray,
-            beta: np.ndarray,
+            pred_seq: np.ndarray,
             mode: str = "train",
             prefix: str = ""):
         r"""
@@ -440,7 +489,7 @@ class CuboidERAModule(pl.LightningModule):
 
 def default_save_name():
     now = time.strftime("%Y%m%d_%H%M%S")
-    return f"earthformer_gamma_era_{now}"
+    return f"earthformer_era_{now}"
 
 def get_parser():
     parser = argparse.ArgumentParser()
@@ -459,7 +508,7 @@ def main():
     args = parser.parse_args()
 
     if args.cfg is None:
-        args.cfg = "configs/earthformer_gamma_default.yaml"
+        args.cfg = "/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean_spi/src/configs/earthformer_default.yaml"
     
     oc_from_file = OmegaConf.load(open(args.cfg, "r"))
     dataset_cfg = OmegaConf.to_object(oc_from_file.data)
@@ -471,6 +520,11 @@ def main():
     seed_everything(seed, workers=True)
 
     train_dl, val_dl, test_dl = CuboidERAModule.get_dataloaders(dataset_cfg, total_batch_size, micro_batch_size, VAL_YEARS, TEST_YEARS)
+    sample = next(iter(train_dl))
+    input_shape = list(sample[0].shape)[1:]
+    output_shape = list(sample[1].shape)[1:]
+    print("input_shape", input_shape)
+    print("output_shape", output_shape)
 
     accumulate_grad_batches = total_batch_size // (micro_batch_size * args.gpus)
 
@@ -482,7 +536,9 @@ def main():
     pl_module = CuboidERAModule(
         total_num_steps=total_num_steps,
         save_dir=args.save,
-        config_file_path=args.cfg,)
+        config_file_path=args.cfg,
+        input_shape = input_shape,
+        output_shape = output_shape)
     
     trainer_kwargs = pl_module.set_trainer_kwargs(
         devices=args.gpus,
@@ -491,10 +547,6 @@ def main():
     trainer = Trainer(**trainer_kwargs)
 
     trainer.fit(model=pl_module, train_dataloaders=train_dl, val_dataloaders=val_dl)
-    # state_dict = pl_ckpt_to_pytorch_state_dict(checkpoint_path=trainer.checkpoint_callback.best_model_path,
-    #                                             map_location=torch.device("cpu"),
-    #                                             delete_prefix_len=len("torch_nn_module."))
-    # torch.save(state_dict, os.path.join(pl_module.save_dir, "checkpoints", pytorch_state_dict_name))
 
 if __name__ == "__main__":
     main()

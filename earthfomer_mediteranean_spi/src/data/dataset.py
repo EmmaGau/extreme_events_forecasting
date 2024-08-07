@@ -233,7 +233,6 @@ class DatasetEra(Dataset):
             months=self.relevant_months,
             vars=variables,
             target=self.target_variables,
-            sum_pr = self.sum_pr,
             is_target = is_target
         )
 
