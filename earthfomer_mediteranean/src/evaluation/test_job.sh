@@ -8,8 +8,9 @@
 #SBATCH --time=05:00:00
 #SBATCH --mem-per-cpu=9000
 
-#SBATCH --output=earthfomer_mediteranean/src/outputs/output-%j.out
-#SBATCH --error=earthfomer_mediteranean/src/outputs/error-%j.err
+#SBATCH --output=/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/outputs/output-%j.out
+#SBATCH --error=/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/outputs/error-%j.err
+
 
 #!/bin/bash
 
@@ -39,4 +40,8 @@ echo "Python executable: $(which python)"
 
 # Exécutez le script
 python -c "import sys; print(sys.path)"
-python evaluation/test.py --checkpoint_path /home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240806_095342/checkpoints/skill/model-skill-epoch=051-valid_skill_score=0.16.ckpt
+python evaluation/test.py --checkpoint_path /home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240815_122224/checkpoints/loss/model-loss-epoch=018_valid_loss_epoch=1.13.ckpt
+python evaluation/test.py --checkpoint_path /home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240815_123711/checkpoints/skill/model-skill-epoch=008-valid_skill_score=0.01.ckpt
+python evaluation/test.py --checkpoint_path /home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240815_120806/checkpoints/skill/model-skill-epoch=014-valid_skill_score=0.01.ckpt
+python evaluation/test.py --checkpoint_path /home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240814_173430_2005_coarse_input-fine_target_res4/checkpoints/skill/model-skill-epoch=059-valid_skill_score=0.00.ckpt
+python evaluation/test.py --checkpoint_path /home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240814_173430_2005_coarse_input-fine_target_res4/checkpoints/skill/model-skill-epoch=059-valid_skill_score=0.00.ckpt

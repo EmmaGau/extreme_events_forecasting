@@ -8,8 +8,8 @@
 #SBATCH --time=48:00:00
 #SBATCH --mem-per-cpu=9000
 
-#SBATCH --output=earthfomer_mediteranean/src/outputs/output-%j.out
-#SBATCH --error=earthfomer_mediteranean/src/outputs/error-%j.err
+#SBATCH --output=/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/outputs/output-%j.out
+#SBATCH --error=/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/outputs/error-%j.err
 
 #!/bin/bash
 

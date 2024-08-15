@@ -6,7 +6,7 @@ from typing import List, Dict
 import numpy as np
 
 class AreaDataset:
-    def __init__(self, area: str, data: xr.Dataset, temporal_resolution: Dict[str, int], spatial_resolution: int, years: List[int], months: List[int], vars: List[str], target: str, sum_pr : bool = False, is_target: bool = False):
+    def __init__(self, area: str, data: xr.Dataset,coarse_t: bool, coarse_s:bool, temporal_resolution: Dict[str, int], spatial_resolution: int, years: List[int], months: List[int], vars: List[str], target: str, sum_pr : bool = False, is_target: bool = False):
         self.area = area
         self.data = data
         self.spatial_resolution = spatial_resolution
@@ -17,7 +17,8 @@ class AreaDataset:
         self.target = target
         self.sum_pr = sum_pr
         self.is_target = is_target
-
+        self.coarse_t = coarse_t
+        self.coarse_s = coarse_s
         self._preprocess()
 
     def _preprocess(self):

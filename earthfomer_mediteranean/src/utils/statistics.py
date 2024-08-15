@@ -14,8 +14,6 @@ from typing import List
 class DataScaler:
     def __init__(self, config):
         self.mode = config['mode']
-        # add an argument coarse 
-        self.coarse = config.get("coarse", False)
 
     def inverse_transform(self, data, statistics):
         if self.mode == 'standardize':
@@ -29,21 +27,20 @@ class DataScaler:
         else:
             raise ValueError(f"Unsupported scaling mode: {self.mode}")
     
-    def _standardize(self, data : xr.Dataset, statistics: xr.Dataset):
-        if self.coarse:
-            standardized_data = (data - statistics["mean"]) / statistics["std"]
-        else:
+    def _standardize(self, data: xr.Dataset, statistics: xr.Dataset):
+        if 'dayofyear' in statistics["mean"].dims:
             dayofyear = data.time.dt.dayofyear
-            # Standardiser les données
             standardized_data = (data - statistics["mean"].sel(dayofyear=dayofyear)) / statistics["std"].sel(dayofyear=dayofyear)
+        else:
+            standardized_data = (data - statistics["mean"]) / statistics["std"]
         return standardized_data
 
-    def _inverse_standardize(self, data, statistics):
-        if self.coarse:
-            return (data * statistics["std"]) + statistics["mean"]
-        else:
+    def _inverse_standardize(self, data: xr.Dataset, statistics: xr.Dataset):
+        if 'dayofyear' in statistics["mean"].dims:
             dayofyear = data.time.dt.dayofyear
             return (data * statistics["std"].sel(dayofyear=dayofyear)) + statistics["mean"].sel(dayofyear=dayofyear)
+        else:
+            return (data * statistics["std"]) + statistics["mean"]
 
 
 #  add an parameter that spatial coarse scaling
@@ -51,10 +48,10 @@ class DataScaler:
 # essaye sur tout le northern hemisphere 
 # for the spatial : we do the mean over an area of grid point 
 class DataStatistics:
-    def __init__(self, years: List[int], months: List[int], coarse: bool = False, coarse_spatial: bool = False):
+    def __init__(self, years: List[int], months: List[int], coarse_temporal: bool = False, coarse_spatial: bool = False):
         self.years = years
         self.months = months
-        self.coarse = coarse
+        self.coarse_temporal = coarse_temporal
         self.coarse_spatial = coarse_spatial
     
     def _get_years_months_str(self):
@@ -62,26 +59,24 @@ class DataStatistics:
         months_str = '-'.join(map(str, self.months))
         return f"{years_range}_{months_str}"
 
-    def get_vars_stats_str(self, data_class: AreaDataset):
+    def get_vars_stats_str(self, data_class: 'AreaDataset'):
         vars = data_class.vars
         return "_".join(vars)
 
-    def _get_stats(self, data_class: AreaDataset) -> Dict[str, xr.DataArray]:
+    def _get_stats(self, data_class: 'AreaDataset') -> Dict[str, xr.DataArray]:
         area = data_class.area
         spatial_resolution = data_class.spatial_resolution
         temporal_resolution = data_class.temporal_resolution
-        sum_pr = data_class.sum_pr
 
         path_base = f"/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/statistics/"
         path_suffix = f"{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_{temporal_resolution}days"
         
-        # Ajouter 'coarse' au path si le mode coarse est activé
-        if self.coarse:
+        if self.coarse_temporal:
             path_suffix += "_coarse"
-        if data_class.sum_pr:
-            path_suffix += "_sum_pr"
         if self.coarse_spatial:
             path_suffix += "_coarse_spatial"
+        if data_class.sum_pr:
+            path_suffix += "_sum_pr"
 
         paths = {
             "mean": f"{path_base}mean_{path_suffix}.nc",
@@ -97,14 +92,14 @@ class DataStatistics:
             self.save_stats(data_class, stats)
             return stats
 
-    def _compute_stats(self, data_class: AreaDataset):
+    def _compute_stats(self, data_class: 'AreaDataset'):
         data = data_class.data
 
         # Sélectionner les années et mois spécifiés
         data = data.sel(time=data.time.dt.year.isin(self.years))
         data = data.sel(time=data.time.dt.month.isin(self.months))
 
-        if self.coarse:
+        if self.coarse_temporal:
             if self.coarse_spatial:
                 stats = {
                     "mean": data.mean(dim=['time', 'latitude', 'longitude']),
@@ -113,7 +108,6 @@ class DataStatistics:
                     "max": data.max(dim=['time', 'latitude', 'longitude'])
                 }
             else: 
-                    # Calculer les statistiques sur tous les jours de toutes les années
                 stats = {
                     "mean": data.mean(dim='time'),
                     "std": data.std(dim='time'),
@@ -135,8 +129,8 @@ class DataStatistics:
         stats["std"] = xr.where(stats["std"] == 0, epsilon, stats["std"])
 
         return stats
-
-    def save_stats(self, data_class, stats):
+    
+    def save_stats(self, data_class: 'AreaDataset', stats: Dict[str, xr.DataArray]):
         area = data_class.area
         spatial_resolution = data_class.spatial_resolution
         temporal_resolution = data_class.temporal_resolution
@@ -147,13 +141,13 @@ class DataStatistics:
         path_base = f"/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/statistics/"
         path_suffix = f"{self._get_years_months_str()}_{self.get_vars_stats_str(data_class)}_{area}_{spatial_resolution}deg_{temporal_resolution}days"
         
-        # Ajouter 'coarse' au path si le mode coarse est activé
-        if self.coarse:
+        if self.coarse_temporal:
             path_suffix += "_coarse"
-        if data_class.sum_pr:
-            path_suffix += "_sum_pr"
         if self.coarse_spatial:
             path_suffix += "_coarse_spatial"
+        if data_class.sum_pr:
+            path_suffix += "_sum_pr"
+
         for stat_name, stat_data in stats.items():
             path = f"{path_base}{stat_name}_{path_suffix}.nc"
             stat_data.to_netcdf(path)
