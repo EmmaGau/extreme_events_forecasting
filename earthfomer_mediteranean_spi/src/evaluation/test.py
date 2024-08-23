@@ -18,6 +18,7 @@ import cartopy.feature as cfeature
 from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 import matplotlib.ticker as mticker
 from utils.statistics import DataStatistics
+import random
 
 
 class Evaluation:
@@ -25,22 +26,43 @@ class Evaluation:
         self.checkpoint_path = checkpoint_path
         self.config_path = config_path
         self.test_dataset = test_dataset
+        print(self.test_dataset.relevant_years)
+        print(self.test_dataset.target_class.data)
+        #(TODO) changer scaler et statistics
         self.scaler = scaler
+
         self.save_folder = self.create_save_folder()
         self.model = None
         self.config = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.statistics = test_dataset.statistics
+         
+        self.unity = {"tp": "mm", "t2m": "K"}
+        self.resolution_output = test_dataset.resolution_output
+
+        self.target_class = test_dataset.target_class
+        computer = DataStatistics(years = test_dataset.scaling_years, months = test_dataset.relevant_months, coarse_temporal = self.target_class.coarse_t, coarse_spatial = self.target_class.coarse_s)
+        self.statistics = computer._get_stats(test_dataset.target_class)
     
     def inverse_scaling(self, data):
-        for var in self.data.vars:
-            data[var] = self.scaler.inverse_transform(data, self.statistics, var)
-        return 
+        for var in data.data_vars:
+            if var != "spi":
+                data[var] = self.scaler.inverse_transform(data, self.statistics, var)
+        return data
 
     def create_save_folder(self):
-        exp_dir = os.path.dirname(os.path.dirname(self.checkpoint_path))
+        checkpoint_dir, _ = os.path.split(self.checkpoint_path)
+
+        if '/checkpoints/' in checkpoint_dir:
+            exp_dir = checkpoint_dir.split('/checkpoints/')[0]
+            print(f"Checkpoints found in path. Experiment directory: {exp_dir}")
+        else:
+            # Handle the case where 'checkpoints' is not in the path (fallback for older structure)
+            exp_dir = os.path.dirname(os.path.dirname(self.checkpoint_path))
+            print(f"Checkpoints not found in path. Fallback experiment directory: {exp_dir}")
+
         save_folder = os.path.join(exp_dir, 'inference_plots')
         os.makedirs(save_folder, exist_ok=True)
+        print(f"Save folder created at: {save_folder}")
         return save_folder
 
     def load_model(self):
@@ -73,6 +95,7 @@ class Evaluation:
         all_inputs = []
         all_input_time_indexes = []
         all_target_time_indexes = []
+        clim_test = []
 
         test_dataloader = torch.utils.data.DataLoader(
             self.test_dataset, 
@@ -83,25 +106,26 @@ class Evaluation:
 
         with torch.no_grad():
             for batch in tqdm(test_dataloader, desc="Processing batches"):
-                input_data, target_data, season_float, year_float, input_time_indexes, target_time_indexes = batch
+                input_data, target_data, season_float, clim_target, year_float, input_time_indexes, target_time_indexes = batch
                 
                 input_data = input_data.to(self.device)
                 target_data = target_data.to(self.device)
                 
-                predictions, _, _, _ = self.model((input_data, target_data, season_float, year_float, input_time_indexes, target_time_indexes))
+                predictions, _, _, _, clim = self.model((input_data, target_data, clim_target, season_float, year_float, input_time_indexes, target_time_indexes))
                 
                 all_inputs.append(input_data.cpu().numpy())
                 all_predictions.append(predictions.cpu().numpy())
                 all_ground_truth.append(target_data.cpu().numpy())
                 all_input_time_indexes.append(self.test_dataset.aggregator.decode_time_indexes(input_time_indexes.numpy()))
                 all_target_time_indexes.append(self.test_dataset.aggregator.decode_time_indexes(target_time_indexes.numpy()))
-
+                clim_test.append(clim.cpu().numpy())
 
         self.all_inputs = np.concatenate(all_inputs, axis=0)
         self.all_predictions = np.concatenate(all_predictions, axis=0)
         self.all_ground_truth = np.concatenate(all_ground_truth, axis=0)
         self.all_input_time_indexes = np.concatenate(all_input_time_indexes, axis=0)
         self.all_target_time_indexes = np.concatenate(all_target_time_indexes, axis=0)
+        self.clim_test = np.concatenate(clim_test, axis=0)
 
         # Calculate climatology
         self.climatology = self.test_dataset.compute_climatology()["mean"]
@@ -115,7 +139,7 @@ class Evaluation:
         self.all_datasets_predictions = []
         self.all_datasets_ground_truth = []
         self.all_datasets_climatology = []
-
+        self.all_datasets_clim_test = []  # Nouvelle liste pour clim_test
 
         for sample in range(self.all_predictions.shape[0]):
             # Convertir les time_indexes en objets datetime pour cet échantillon
@@ -130,6 +154,7 @@ class Evaluation:
             data_vars_predictions = {}
             data_vars_ground_truth = {}
             data_vars_climatology = {}
+            data_vars_clim_test = {}  # Nouveau dictionnaire pour clim_test
 
             for i, var in enumerate(self.test_dataset.target_variables):
                 data_vars_predictions[var] = xr.DataArray(
@@ -139,6 +164,11 @@ class Evaluation:
                 )
                 data_vars_ground_truth[var] = xr.DataArray(
                     self.all_ground_truth[sample, :, :, :, i],
+                    coords=coords,
+                    dims=['time', 'latitude', 'longitude']
+                )
+                data_vars_clim_test[var] = xr.DataArray(  # Nouvelle DataArray pour clim_test
+                    self.clim_test[sample, :, :, :, i],
                     coords=coords,
                     dims=['time', 'latitude', 'longitude']
                 )
@@ -157,48 +187,51 @@ class Evaluation:
             ds_predictions = xr.Dataset(data_vars_predictions, coords=coords)
             ds_ground_truth = xr.Dataset(data_vars_ground_truth, coords=coords)
             ds_climatology = xr.Dataset(data_vars_climatology, coords=coords)
-
+            ds_clim_test = xr.Dataset(data_vars_clim_test, coords=coords)  # Nouveau Dataset pour clim_test
 
             # Appliquer l'inverse scaling séparément
             ds_predictions = self.inverse_scaling(ds_predictions)
             ds_ground_truth = self.inverse_scaling(ds_ground_truth)
+            ds_clim_test = self.inverse_scaling(ds_clim_test)  # Appliquer l'inverse scaling à clim_test
 
             self.all_datasets_predictions.append(ds_predictions)
             self.all_datasets_ground_truth.append(ds_ground_truth)
             self.all_datasets_climatology.append(ds_climatology)
-
-        # to do ds_climatology :
-        #pick the dates that are present in ds_predictions and use the value of the variables in self.climatology at those dates to create the climatology dataset
-
+            self.all_datasets_clim_test.append(ds_clim_test)  # Ajouter clim_test à la liste
 
     def generate_plots(self):
-        resolution_output = self.test_dataset.resolution_output
+        n_samples = len(self.all_datasets_predictions)
+        random_samples = random.sample(range(n_samples), min(30, n_samples))
+
         for var_name in self.test_dataset.target_variables:
-            for sample, (pred_dataset, truth_dataset) in enumerate(zip(self.all_datasets_predictions, self.all_datasets_ground_truth)):
+            for sample in random_samples:
+                pred_dataset = self.all_datasets_predictions[sample]
+                truth_dataset = self.all_datasets_ground_truth[sample]
+                clim_dataset = self.all_datasets_climatology[sample]
+
                 time_steps = pred_dataset.time.values
                 n_lead_times = len(time_steps)
 
-                fig, axs = plt.subplots(2, n_lead_times, figsize=(6*n_lead_times, 10), 
+                fig, axs = plt.subplots(3, n_lead_times, figsize=(5*n_lead_times, 15), 
                                         subplot_kw={'projection': ccrs.PlateCarree()})
-                
-                if n_lead_times == 1:
-                    axs = axs.reshape(2, 1)
 
-                # Définir les limites de la carte
+                if n_lead_times == 1:
+                    axs = axs.reshape(3, 1)
+
                 lats = [30] + list(pred_dataset[var_name].latitude.values) + [45]
                 lons = [-10] + list(pred_dataset[var_name].longitude.values) + [40]
 
-                # Choisir la palette de couleurs en fonction de la variable
                 cmap = 'Blues' if var_name == "tp" else 'Reds'
 
                 for lead_time, time in enumerate(time_steps):
                     pred = pred_dataset[var_name].sel(time=time)
                     truth = truth_dataset[var_name].sel(time=time)
+                    clim = clim_dataset[var_name].sel(time=time)
 
-                    vmin = min(pred.min().item(), truth.min().item())
-                    vmax = max(pred.max().item(), truth.max().item())
+                    vmin = min(pred.min().item(), truth.min().item(), clim.min().item())
+                    vmax = max(pred.max().item(), truth.max().item(), clim.max().item())
 
-                    for row, data in enumerate([pred, truth]):
+                    for row, data in enumerate([pred, truth, clim]):
                         ax = axs[row, lead_time]
                         
                         im = ax.imshow(data, vmin=vmin, vmax=vmax, cmap=cmap,
@@ -215,166 +248,275 @@ class Evaluation:
                         gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
                         gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
                         
-                        # Supposons que 'time' est un objet datetime ou similaire
                         import pandas as pd
-
-                        # Convertir numpy.datetime64 en datetime Python
                         python_datetime = pd.Timestamp(time).to_pydatetime()
-                        title = f'Prediction average - {str(time)[:10]}' if row == 0 else f'Ground Truth average - {str(time)[:10]}'
+                        if row == 0:
+                            title = f'Prediction average - {str(time)[:10]}'
+                        elif row == 1:
+                            title = f'Ground Truth average - {str(time)[:10]}'
+                        else:
+                            title = f'Climatology average - {str(time)[:10]}'
                         ax.set_title(title, fontsize=10)
 
-                # Ajuster la disposition des sous-graphiques
-                plt.tight_layout()
+                # Adjust layout to remove extra space
+                plt.tight_layout(w_pad=0.5, h_pad=1.0)
 
-                # Ajouter une barre de couleur commune
+                # Add a common colorbar to the right side
                 cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
                 cbar = fig.colorbar(im, cax=cbar_ax)
                 cbar.set_label(var_name, rotation=270, labelpad=15)
+
+                # Adjust the figure size to accommodate the colorbar
+                fig.set_size_inches(5*n_lead_times + 1, 15)
 
                 plt.savefig(os.path.join(self.save_folder, f'{var_name}_sample_{sample}_all_lead_times.png'), 
                             bbox_inches='tight', dpi=300)
                 plt.close()
 
     def calculate_mse(self):
-        self.mse_model = {}
-        self.mse_climatology = {}
-        self.relative_mse_model = {}
-        self.relative_mse_climatology = {}
-        
-        for var in self.test_dataset.target_variables:
-            self.mse_model[var] = []
-            self.mse_climatology[var] = []
-            self.relative_mse_model[var] = []
-            self.relative_mse_climatology[var] = []
+            self.mse_model = {}
+            self.mse_climatology = {}
+            self.relative_mse_model = {}
+            self.relative_mse_climatology = {}
+            self.rmse_model = {}
+            self.rmse_climatology = {}
+            self.skill_score = {}
             
-            for lead_time in range(len(self.all_datasets_ground_truth[0].time)):
-                truth = np.concatenate([ds[var].isel(time=lead_time).values.flatten() for ds in self.all_datasets_ground_truth])
-                pred = np.concatenate([ds[var].isel(time=lead_time).values.flatten() for ds in self.all_datasets_predictions])
-                clim = np.concatenate([ds[var].isel(time=lead_time).values.flatten() for ds in self.all_datasets_climatology])
+            for var in self.test_dataset.target_variables:
+                self.mse_model[var] = []
+                self.mse_climatology[var] = []
+                self.relative_mse_model[var] = []
+                self.relative_mse_climatology[var] = []
+                self.rmse_model[var] = []
+                self.rmse_climatology[var] = []
+                self.skill_score[var] = []
                 
-                mse_model = np.mean((truth - pred)**2)
-                mse_clim = np.mean((truth - clim)**2)
-                
-                range_squared = (np.max(truth) - np.min(truth))**2
-                
-                self.mse_model[var].append(mse_model)
-                self.mse_climatology[var].append(mse_clim)
-                self.relative_mse_model[var].append(mse_model / range_squared)
-                self.relative_mse_climatology[var].append(mse_clim / range_squared)
+                for lead_time in range(len(self.all_datasets_ground_truth[0].time)):
+                    truth = np.concatenate([ds[var].isel(time=lead_time).values.flatten() for ds in self.all_datasets_ground_truth])
+                    pred = np.concatenate([ds[var].isel(time=lead_time).values.flatten() for ds in self.all_datasets_predictions])
+                    clim = np.concatenate([ds[var].isel(time=lead_time).values.flatten() for ds in self.all_datasets_climatology])
+                    
+                    mse_model = np.mean((truth - pred)**2)
+                    mse_clim = np.mean((truth - clim)**2)
+                    
+                    range_squared = (np.max(truth) - np.min(truth))**2
+                    
+                    self.mse_model[var].append(mse_model)
+                    self.mse_climatology[var].append(mse_clim)
+                    self.relative_mse_model[var].append(mse_model / range_squared)
+                    self.relative_mse_climatology[var].append(mse_clim / range_squared)
+                    self.rmse_model[var].append(np.sqrt(mse_model))
+                    self.rmse_climatology[var].append(np.sqrt(mse_clim))
+                    self.skill_score[var].append(1- (mse_model / mse_clim))
+            
+            
+                if var == "tp":
+                    self.rmse_model[var] = [x * 1000 for x in self.rmse_model["tp"]]
+                    self.rmse_climatology[var] = [x * 1000 for x in self.rmse_climatology["tp"]]
+            # transformer tous les rmse par grid cell 
+            self.rmse_climatology = {key: [v / self.resolution_output for v in value] for key, value in self.rmse_climatology.items()}
+            self.rmse_model = {key: [v / self.resolution_output for v in value] for key, value in self.rmse_model.items()}
+
+
 
     def plot_mse_curves(self):
         for var in self.test_dataset.target_variables:
+            lead_times = [i*self.test_dataset.resolution_output for i in range(len(self.all_datasets_ground_truth[0].time))]
+
+            # Plot Relative MSE
             plt.figure(figsize=(12, 7))
-            
-            lead_times = range(len(self.relative_mse_model[var]))
-            
             plt.plot(lead_times, self.relative_mse_model[var], 'o-', label='Model', markersize=6)
             plt.plot(lead_times, self.relative_mse_climatology[var], 's-', label='Climatology', markersize=6)
-            
             plt.title(f'Relative MSE vs Lead Time - {var}', fontsize=16)
             plt.xlabel('Lead Time', fontsize=14)
             plt.ylabel('Relative MSE', fontsize=14)
-            
-            # Ajuster l'axe des abscisses
             plt.xticks(lead_times)
             plt.grid(True, which='both', linestyle='--', alpha=0.7)
-            
-            # Améliorer la légende
             plt.legend(fontsize=12, loc='upper left')
-            
-            # Ajuster les marges
             plt.tight_layout()
-            
-            # Sauvegarder la figure
             plt.savefig(os.path.join(self.save_folder, f'{var}_relative_mse_comparison.png'), dpi=300, bbox_inches='tight')
             plt.close()
 
-        for var in self.test_dataset.target_variables:
+            # Plot MSE
             plt.figure(figsize=(12, 7))
-            
-            lead_times = range(len(self.mse_model[var]))
-            
             plt.plot(lead_times, self.mse_model[var], 'o-', label='Model', markersize=6)
             plt.plot(lead_times, self.mse_climatology[var], 's-', label='Climatology', markersize=6)
-            
-            
             plt.title(f'MSE vs Lead Time - {var}', fontsize=16)
             plt.xlabel('Lead Time', fontsize=14)
             plt.ylabel('MSE', fontsize=14)
-            
-            # Ajuster l'axe des abscisses
             plt.xticks(lead_times)
             plt.grid(True, which='both', linestyle='--', alpha=0.7)
-            
-            # Améliorer la légende
             plt.legend(fontsize=12, loc='upper left')
-            
-            # Ajuster les marges
             plt.tight_layout()
+            plt.savefig(os.path.join(self.save_folder, f'{var}_mse_comparison.png'), dpi=300, bbox_inches='tight')
+            plt.close()
+
             
-            # Sauvegarder la figure
-            plt.savefig(os.path.join(self.save_folder, f'{var}mse_comparison.png'), dpi=300, bbox_inches='tight')
+            # Plot RMSE
+            plt.figure(figsize=(12, 7))
+            plt.plot(lead_times, self.rmse_model[var], 'o-', label='Model', markersize=6)
+            plt.plot(lead_times, self.rmse_climatology[var], 's-', label='Climatology', markersize=6)
+            plt.title(f'RMSE vs Lead Time - {var}', fontsize=16)
+            plt.xlabel('Lead Time', fontsize=14)
+            plt.ylabel(f'RMSE in {self.unity[var]} ', fontsize=14)
+            plt.xticks(lead_times)
+            plt.grid(True, which='both', linestyle='--', alpha=0.7)
+            plt.legend(fontsize=12, loc='upper left')
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.save_folder, f'{var}_rmse_comparison.png'), dpi=300, bbox_inches='tight')
             plt.close()
 
 
-    
-
     def calculate_spatial_mse(self):
-        self.spatial_mse = {}
-        self.spatial_relative_mse = {}
+        self.spatial_mse_model = {}
+        self.spatial_relative_mse_model = {}
+        self.spatial_rmse_model = {}
+        self.spatial_mse_climatology = {}
+        self.spatial_relative_mse_climatology = {}
+        self.spatial_rmse_climatology = {}
+        
         for var in self.test_dataset.target_variables:
-            mse = np.zeros_like(self.all_datasets_ground_truth[0][var].isel(time=0).values)
+            mse_model = np.zeros_like(self.all_datasets_ground_truth[0][var].isel(time=0).values)
+            mse_climatology = np.zeros_like(self.all_datasets_ground_truth[0][var].isel(time=0).values)
             truth_min = np.inf
             truth_max = -np.inf
-            for ds_truth, ds_pred in zip(self.all_datasets_ground_truth, self.all_datasets_predictions):
+            
+            for ds_truth, ds_pred, ds_clim in zip(self.all_datasets_ground_truth, self.all_datasets_predictions, self.all_datasets_climatology):
                 truth = ds_truth[var].values
                 pred = ds_pred[var].values
-                mse += np.mean((truth - pred)**2, axis=0)
+                clim = ds_clim[var].values
+                mse_model += np.mean((truth - pred)**2, axis=0)
+                mse_climatology += np.mean((truth - clim)**2, axis=0)
                 truth_min = min(truth_min, np.min(truth))
                 truth_max = max(truth_max, np.max(truth))
-            mse /= len(self.all_datasets_ground_truth)
-            self.spatial_mse[var] = mse
+            
+            mse_model /= len(self.all_datasets_ground_truth)
+            mse_climatology /= len(self.all_datasets_ground_truth)
+            self.spatial_mse_model[var] = mse_model
+            self.spatial_mse_climatology[var] = mse_climatology
             range_squared = (truth_max - truth_min)**2
-            self.spatial_relative_mse[var] = mse / range_squared
+            self.spatial_relative_mse_model[var] = mse_model / range_squared
+            self.spatial_relative_mse_climatology[var] = mse_climatology / range_squared
+            self.spatial_rmse_model[var] = np.sqrt(mse_model) 
+            self.spatial_rmse_climatology[var] = np.sqrt(mse_climatology)
+            if var == "tp":
+                self.spatial_rmse_model[var] *= 1000
+                self.spatial_rmse_climatology[var] *= 1000
+        
+
 
     def plot_spatial_mse(self):
-        for var, mse in self.spatial_relative_mse.items():
-            fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
-
-            # Définir les limites de la carte
+        for var in self.test_dataset.target_variables:
             lats = [30] + list(self.all_datasets_ground_truth[0].latitude.values) + [45]
             lons = [-10] + list(self.all_datasets_ground_truth[0].longitude.values) + [40]
 
-            # Tracer la carte de MSE
-            im = ax.imshow(mse, cmap='YlOrRd', transform=ccrs.PlateCarree(),
-                        extent=[lons[0], lons[-1], lats[0], lats[-1]])
-
-            # Ajouter les caractéristiques de la carte
+            # Plot spatial relative MSE for model
+            fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
+            im = ax.imshow(self.spatial_relative_mse_model[var], cmap='YlOrRd', transform=ccrs.PlateCarree(),
+                           extent=[lons[0], lons[-1], lats[0], lats[-1]])
             ax.coastlines(resolution='50m', color='black', linewidth=0.5)
             ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
             ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
             ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
-
-            # Ajouter une grille
             gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                            linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+                              linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
             gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
             gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
             gl.top_labels = False
             gl.right_labels = False
-
-            # Ajouter une barre de couleur
             cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
-            cbar.set_label(f'MSE - {var}', fontsize=12)
-
-            # Définir le titre
-            plt.title(f' Relative Spatial MSE - {var}', fontsize=16)
-
-            # Ajuster la disposition
+            cbar.set_label(f'Relative MSE - {var}', fontsize=12)
+            plt.title(f'Relative Spatial MSE - Model - {var}', fontsize=16)
             plt.tight_layout()
+            plt.savefig(os.path.join(self.save_folder, f'{var}_spatial_relative_mse_model.png'), 
+                        bbox_inches='tight', dpi=300)
+            plt.close()
 
-            # Sauvegarder la figure
-            plt.savefig(os.path.join(self.save_folder, f'{var}_spatial_mse.png'), 
+            # Plot spatial relative MSE for climatology
+            fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
+            im = ax.imshow(self.spatial_relative_mse_climatology[var], cmap='YlOrRd', transform=ccrs.PlateCarree(),
+                           extent=[lons[0], lons[-1], lats[0], lats[-1]])
+            ax.coastlines(resolution='50m', color='black', linewidth=0.5)
+            ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
+            ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
+            ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
+            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                              linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+            gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
+            gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
+            gl.top_labels = False
+            gl.right_labels = False
+            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
+            cbar.set_label(f'Relative MSE - {var}', fontsize=12)
+            plt.title(f'Relative Spatial MSE - Climatology - {var}', fontsize=16)
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.save_folder, f'{var}_spatial_relative_mse_climatology.png'), 
+                        bbox_inches='tight', dpi=300)
+            plt.close()
+
+            # Plot spatial RMSE for model
+            fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
+            im = ax.imshow(self.spatial_rmse_model[var], cmap='YlOrRd', transform=ccrs.PlateCarree(),
+                           extent=[lons[0], lons[-1], lats[0], lats[-1]])
+            ax.coastlines(resolution='50m', color='black', linewidth=0.5)
+            ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
+            ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
+            ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
+            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                              linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+            gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
+            gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
+            gl.top_labels = False
+            gl.right_labels = False
+            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
+            cbar.set_label(f'RMSE - {var}', fontsize=12)
+            plt.title(f'Spatial RMSE in - Model - {var}', fontsize=16)
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.save_folder, f'{var}_spatial_rmse_model.png'), 
+                        bbox_inches='tight', dpi=300)
+            plt.close()
+
+            # Plot spatial RMSE for climatology
+            fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
+            im = ax.imshow(self.spatial_rmse_climatology[var], cmap='YlOrRd', transform=ccrs.PlateCarree(),
+                           extent=[lons[0], lons[-1], lats[0], lats[-1]])
+            ax.coastlines(resolution='50m', color='black', linewidth=0.5)
+            ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
+            ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
+            ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
+            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                              linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+            gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
+            gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
+            gl.top_labels = False
+            gl.right_labels = False
+            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
+            cbar.set_label(f'RMSE - {var}', fontsize=12)
+            plt.title(f'Spatial RMSE - Climatology in - {var}', fontsize=16)
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.save_folder, f'{var}_spatial_rmse_climatology.png'), 
+                        bbox_inches='tight', dpi=300)
+            plt.close()
+
+             # Plot spatial RMSE model - RMSE climatology
+            fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
+            im = ax.imshow(self.spatial_rmse_model[var]- self.spatial_rmse_climatology[var], cmap='YlOrRd', transform=ccrs.PlateCarree(),
+                           extent=[lons[0], lons[-1], lats[0], lats[-1]])
+            ax.coastlines(resolution='50m', color='black', linewidth=0.5)
+            ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
+            ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
+            ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
+            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                              linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+            gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
+            gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
+            gl.top_labels = False
+            gl.right_labels = False
+            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
+            cbar.set_label(f'RMSE - {var}', fontsize=12)
+            plt.title(f'Spatial RMSE model - RMSE climatology - {var}', fontsize=16)
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.save_folder, f'{var}_spatial_rmse_model_climatology.png'),
                         bbox_inches='tight', dpi=300)
             plt.close()
 
@@ -385,33 +527,48 @@ class Evaluation:
             df[f'{var}_climatology'] = self.mse_climatology[var]
             df[f'{var}_relative_model'] = self.relative_mse_model[var]
             df[f'{var}_relative_climatology'] = self.relative_mse_climatology[var]
-        
+            df[f'{var}_rmse_model'] = self.rmse_model[var]
+            df[f'{var}_rmse_climatology'] = self.rmse_climatology[var]
+        # rajouter les moyennes de chaqque colonne 
+
+        means = df.mean()
+    
+        # Ajouter une ligne de séparation (optionnel)
+        df.loc['---'] = '---'
+
+        # Ajouter la ligne des moyennes
+        df.loc['mean'] = means
+
+
         df.to_csv(os.path.join(self.save_folder, 'mse_results.csv'), index=False)
         
 
     def save_results(self):
-        # Initialiser des listes pour stocker tous les datasets
+       # Créer des listes pour stocker les datasets
         all_preds = []
         all_truths = []
-
+        all_clims = []
         # Parcourir tous les échantillons
-        for i, (pred, truth) in enumerate(zip(self.all_datasets_predictions, self.all_datasets_ground_truth)):
+        for i, (pred, truth, clim) in enumerate(zip(self.all_datasets_predictions, self.all_datasets_ground_truth, self.all_datasets_climatology)):
             # Ajouter une dimension 'sample' à chaque dataset
             pred = pred.expand_dims(sample=[i])
             truth = truth.expand_dims(sample=[i])
+            clim = clim.expand_dims(sample=[i])
             
             all_preds.append(pred)
             all_truths.append(truth)
+            all_clims.append(clim)
 
-        # Combiner tous les datasets de prédiction
-        combined_preds = xr.concat(all_preds, dim='sample')
-        
         # Combiner tous les datasets de vérité terrain
         combined_truths = xr.concat(all_truths, dim='sample')
+        combined_preds = xr.concat(all_preds, dim='sample')
+        combined_clims = xr.concat(all_clims, dim='sample')
 
         # Sauvegarder les datasets combinés
         combined_preds.to_netcdf(os.path.join(self.save_folder, 'all_predictions.nc'))
         combined_truths.to_netcdf(os.path.join(self.save_folder, 'all_ground_truths.nc'))
+        combined_clims.to_netcdf(os.path.join(self.save_folder, 'all_climatology.nc'))
+        self.target_class.data.to_netcdf(os.path.join(self.save_folder, 'target.nc'))
 
         # Calculer et sauvegarder les MSE
         self.calculate_mse()
@@ -435,14 +592,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--checkpoint_path', type=str, required=True)
     args = parser.parse_args()
-
     checkpoint_path = args.checkpoint_path
-    config_path = os.path.join(os.path.dirname(os.path.dirname(checkpoint_path)), 'cfg.yaml')
+
+    exp_dir = checkpoint_path.split('/checkpoints/')[0]
+    print(f"Experiment directory: {exp_dir}")
+    config_path = os.path.join(exp_dir, 'cfg.yaml')
 
     oc = OmegaConf.load(config_path)
     dataset_cfg = OmegaConf.to_object(oc.data)
     test_config = dataset_cfg.copy()
-    test_config['dataset']['relevant_years'] = [2011, 2023]  # Your TEST_YEARS
+    test_config['dataset']['relevant_years'] = [2016, 2024]
+
     data_dirs = dataset_cfg['data_dirs']
     scaler = DataScaler(dataset_cfg['scaler'])
     dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['resolution_output']
@@ -450,5 +610,14 @@ if __name__ == "__main__":
 
     test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory, scaler)
 
-    evaluation = Evaluation(checkpoint_path, config_path, test_dataset, scaler)
-    evaluation.run_evaluation()
+    # save the whole dataset to get a climatology for the percentiles
+    all_config = dataset_cfg.copy()
+    all_config['dataset']['relevant_years'] = [1940, 2024]
+    all_dataset =  DatasetEra(all_config, data_dirs, temp_aggregator_factory, scaler).target_class.data.to_netcdf(os.path.join(exp_dir, '1940_2024_target.nc'))
+
+
+    dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=2, shuffle=False, num_workers=4)
+    eval = Evaluation(checkpoint_path, config_path, test_dataset, scaler)
+    eval.run_evaluation()
+
+  

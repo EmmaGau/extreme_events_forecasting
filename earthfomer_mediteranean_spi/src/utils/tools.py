@@ -6,7 +6,7 @@ from typing import List, Dict
 import numpy as np
 
 class AreaDataset:
-    def __init__(self, area: str, data: xr.Dataset, temporal_resolution: Dict[str, int], spatial_resolution: int, years: List[int], months: List[int], vars: List[str], target: str, sum_pr : bool = False, is_target: bool = False):
+    def __init__(self, area: str, data: xr.Dataset,coarse_t: bool, coarse_s:bool, temporal_resolution: Dict[str, int], spatial_resolution: int, years: List[int], months: List[int], vars: List[str], target: str, sum_pr : bool = False, is_target: bool = False):
         self.area = area
         self.data = data
         self.spatial_resolution = spatial_resolution
@@ -17,7 +17,8 @@ class AreaDataset:
         self.target = target
         self.sum_pr = sum_pr
         self.is_target = is_target
-
+        self.coarse_t = coarse_t
+        self.coarse_s = coarse_s
         self._preprocess()
 
     def _preprocess(self):
@@ -44,10 +45,10 @@ class AreaDataset:
         new_data = xr.Dataset()
 
         for var in self.vars:
-            if var != "time_bnds":
+              if var != "time_bnds":
                 if var == 'spi':
                     # Pour 'spi', ne pas changer la résolution temporelle mais enlever les NaN
-                    new_data[var] = self.data[var].dropna(dim='time')
+                    new_data[var] = self.data[var].dropna(dim='time').sel(time=dates_to_keep)
                 elif np.issubdtype(self.data[var].dtype, np.number):
                     # Appliquer le rolling non centré
                     rolled = self.data[var].rolling(time=temporal_resolution, center=False).mean()

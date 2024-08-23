@@ -36,26 +36,24 @@ class DatasetEra(Dataset):
             temporal_aggregator (TemporalAggregator): _description_
             scaler (DataScaler, optional): _description_. Defaults to None.
         """
+        self.scaler = scaler
         self._initialize_config(wandb_config)
         self.data_dirs = data_dirs
         self.aggregator_factory = temporal_aggr_factory
-        self.scaler = scaler 
-        self.global_variables = self.variables_med.copy()  # Commencez avec les variables méditerranéennes
+        self.global_variables = self.variables_med.copy() 
 
         if self.variables_nh is not None:
             self.global_variables.extend(self.variables_nh)
         
         if hasattr(self, 'variables_tropics') and self.variables_tropics is not None:
             self.global_variables.extend(self.variables_tropics)
-
+        
         self.resolution_input = self.aggregator_factory.resolution_input
         self.resolution_output = self.aggregator_factory.resolution_output
         self.data, self.target = self._load_and_prepare_data()
+        self.scaled_clim = self.get_climatology()
 
-        self.aggregator = self.aggregator_factory.create_aggregator(self.data, self.target)
-        
-        self.first_year = self.data.time.dt.year.min().item()
-        self.last_year = self.data.time.dt.year.max().item()
+        self.aggregator = self.aggregator_factory.create_aggregator(self.data, self.target, self.scaled_clim)
 
         self.land_sea_mask = self.get_binary_sea_mask()
         
@@ -72,19 +70,28 @@ class DatasetEra(Dataset):
         self.relevant_years =  self.expand_year_range(ds_conf["relevant_years"])
         self.predict_sea_land= ds_conf["predict_sea_land"]
         self.out_spatial_resolution = ds_conf.get("out_spatial_resolution", 1.0)  # Default to 1.0 if not specified
+        self.sum_pr = ds_conf.get("sum_pr", False)
         self.variables_tropics = ds_conf.get("variables_tropics", None)
-        self.coarse_spatial = ds_conf.get("coarse_spatial", False)
-    
+        self.coarse_t = ds_conf.get("coarse_t", True)
+        self.coarse_s = ds_conf.get("coarse_s", False)
+        self.coarse_t_target = ds_conf.get("coarse_t_target", True)
+        self.coarse_s_target = ds_conf.get("coarse_s_target", False)
+        if "coarse" in wandb_config["scaler"].keys():
+            self.coarse_t = wandb_config["scaler"]["coarse"]
+            self.coarse_t_target = wandb_config["scaler"]["coarse"]
+            print(f"Applying {'coarse' if self.coarse_t else 'fine-grained'} temporal scaling for both input and target data.")
+            
+        
     def _load_data(self, dir_path):
         """Load data from a specified directory using xarray."""
-        ds = xr.open_dataset(dir_path, chunks = None)
+        ds = xr.open_dataset(dir_path)
         if '__xarray_dataarray_variable__' in ds.data_vars:
             ds = ds.rename({'__xarray_dataarray_variable__': 'spi'})
             print("Variable renamed to 'spi'.")
         return ds
     
     def compute_climatology(self):
-        computer = DataStatistics(self.relevant_years, self.relevant_months, coarse=False)
+        computer = DataStatistics(self.scaling_years, self.relevant_months, coarse_temporal=False , coarse_spatial = False)
         clim = computer._get_stats(self.target_class)
         return clim 
             
@@ -124,28 +131,18 @@ class DatasetEra(Dataset):
 
     def process_scaling(self, data_class: AreaDataset):
         scale_all_vars = "spi" not in data_class.vars
-        if self.coarse_spatial:
-            if data_class.is_target:
-                self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months, coarse=False, coarse_spatial=False)
-                self.scaler.coarse = False
-            else:
-                self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months, coarse= True, coarse_spatial=True)
-                self.scaler.coarse = True
-        else:
-            self.stat_computer = DataStatistics(self.scaling_years, self.relevant_months, coarse= self.scaler.coarse)
-        # Compute statistics
-        self.statistics = self.stat_computer._get_stats(data_class)
+        computer = DataStatistics(self.scaling_years, self.relevant_months, coarse_temporal = data_class.coarse_t, coarse_spatial = data_class.coarse_s)
+        statistics = computer._get_stats(data_class)
         # Apply scaling
         scaled_data = data_class.data.copy()
-    
         for var in data_class.vars:
             if scale_all_vars or var != "spi":
-                scaled_data[var] = self.scaler.transform(data_class.data, self.statistics, var)
-            else:
-                # Si la variable est 'spi', ne pas appliquer de redimensionnement
-                scaled_data[var] = data_class.data[var]
-
+                scaled_data[var] = self.scaler.transform(data_class.data, statistics, var)
         return scaled_data
+    
+    def get_climatology(self):
+        clim = self.compute_climatology()["mean"]
+        return clim
 
     def _load_and_prepare_data(self):
         """Load data from directories for all variables and create big dataset that contains all variables for both regions
@@ -167,7 +164,6 @@ class DatasetEra(Dataset):
 
             if med_datasets:
                 med_datasets[0], med_data = self.check_dataset(med_datasets[0], med_data, var)
-                # si y a des nan, print something et replace theme by 0 
             med_datasets.append(med_data)
         
         med_data = xr.merge(med_datasets, compat='override', join='inner')
@@ -206,7 +202,6 @@ class DatasetEra(Dataset):
         self.target_class = self._create_area_dataset("target", med_data[self.target_variables], self.target_variables, is_target=True)
 
         # Mise à l'échelle des données
-
         med_data = self.process_scaling(self.med_class)
         nh_data = self.process_scaling(self.nh_class) if self.nh_class is not None else None
         tropics_data = self.process_scaling(self.tropics_class) if self.tropics_class is not None else None
@@ -233,8 +228,10 @@ class DatasetEra(Dataset):
             months=self.relevant_months,
             vars=variables,
             target=self.target_variables,
-            is_target = is_target
-        )
+            sum_pr = self.sum_pr,
+            is_target = is_target,
+            coarse_t = self.coarse_t_target if is_target else self.coarse_t,
+            coarse_s =  self.coarse_s_target if is_target else self.coarse_s)
 
     def _remap_and_merge_data(self, med_data, nh_data, tropics_data):
         # Trouver les temps communs à tous les jeux de données
@@ -375,31 +372,30 @@ class DatasetEra(Dataset):
         
     def __getitem__(self, idx):
         input_list = []
+        clim_list = []
         # Aggregate the input data
-        input_aggregated, target_aggregated, season_float, year_float , input_time_indexes, target_time_indexes = self.aggregator.aggregate(idx)
-        print(season_float, year_float)
-
+        input_aggregated, target_aggregated, clim_target_data, season_float, year_float , input_time_indexes, target_time_indexes = self.aggregator.aggregate(idx)
        # input data preparation
         for var in self.global_variables:
             input_list.append(input_aggregated[var].values)
+        for var in self.target_variables:
+            clim_list.append(clim_target_data[var].values)
+        
+        clim_tensor = torch.tensor(np.transpose(np.array(clim_list), (1,2,3,0)))
             
         input_data_np = np.transpose(np.array(input_list), (1,2,3,0))
         input_tensor = torch.tensor(input_data_np)  # size (batch_size, height, width, channels)
 
         # target preparation
         target_tensor = self._prepare_target(target_aggregated) # size (batch_size, height, width, channels)
-        print("target_tensor", target_tensor.shape)
-        print("input_tensor", input_tensor.shape)
         # replace nan values by 0
         input_tensor = torch.nan_to_num(input_tensor, nan=0.0)
         target_tensor = torch.nan_to_num(target_tensor, nan=0.0)
         input_time_tensor = torch.tensor(input_time_indexes)
         target_time_tensor = torch.tensor(target_time_indexes)
 
-        return input_tensor, target_tensor, season_float, year_float, input_time_tensor, target_time_tensor
+        return input_tensor, target_tensor, season_float, year_float, clim_tensor, input_time_tensor, target_time_tensor
 
-
-    
 if __name__ == "__main__":
     data_dirs = {'mediteranean': {'spi':"/home/egauillard/data/SPI_7_era5_MED_1degr_19400101_20240229_new.nc",
                                   't2m':"/home/egauillard/data/T2M_era5_MED_1degr_19400101-20240229.nc"},

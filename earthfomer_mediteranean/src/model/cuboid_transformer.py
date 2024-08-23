@@ -3209,33 +3209,33 @@ class CuboidTransformerModel(nn.Module):
         dec_out = self.final_decoder(dec_out)
         print("final decoder", dec_out.shape)
 
-        if self.season_float == True:
-            # Supposons que dec_out a la forme [B, T, H, W, C]
-            B, T, H, W, C = dec_out.shape
-            year_float = year_float.view(B, 1, 1, 1, 1).expand(B, T, H, W, 1)
-            season_float = season_float.view(B, 1, 1, 1, 1).expand(B, T, H, W, 1)
+        # if self.season_float == True:
+        #     # Supposons que dec_out a la forme [B, T, H, W, C]
+        #     B, T, H, W, C = dec_out.shape
+        #     year_float = year_float.view(B, 1, 1, 1, 1).expand(B, T, H, W, 1)
+        #     season_float = season_float.view(B, 1, 1, 1, 1).expand(B, T, H, W, 1)
 
-            # put everithing on the same device 
-            year_float, season_float = year_float.to(dec_out.device), season_float.to(dec_out.device)
+        #     # put everithing on the same device 
+        #     year_float, season_float = year_float.to(dec_out.device), season_float.to(dec_out.device)
             
-            # Concaténer le long de la dimension des canaux
-            dec_out = torch.cat([dec_out, year_float, season_float], dim=-1)
-            print("dec_out with year and season:", dec_out.shape)
+        #     # Concaténer le long de la dimension des canaux
+        #     dec_out = torch.cat([dec_out, year_float, season_float], dim=-1)
+        #     print("dec_out with year and season:", dec_out.shape)
         
-        print("dec_final_proj:", self.dec_final_proj)
+        # print("dec_final_proj:", self.dec_final_proj)
 
         out = self.dec_final_proj(dec_out)
-        print(self.gaussian)
-        eps = 1e-6
-        if self.gaussian:
-            # For Gaussian distribution, we assume out[..., 0:1] is the mean and out[..., 1:2] is the log of the standard deviation
-            # out est de la forme [B,T,H,W,C*2] tu peux flatten la derniere dim pour séparer min et max
-            out = out.view(B, T_out, H_out, W_out, C_out, 2)
-            mean = out[..., 0:1]
-            std = torch.exp(out[..., 1:2])
+        # print(self.gaussian)
+        # eps = 1e-6
+        # if self.gaussian:
+        #     # For Gaussian distribution, we assume out[..., 0:1] is the mean and out[..., 1:2] is the log of the standard deviation
+        #     # out est de la forme [B,T,H,W,C*2] tu peux flatten la derniere dim pour séparer min et max
+        #     out = out.view(B, T_out, H_out, W_out, C_out, 2)
+        #     mean = out[..., 0:1]
+        #     std = torch.exp(out[..., 1:2])
 
-            print("After exp - std min:", std.min().item(), "max:", std.max().item())
+        #     print("After exp - std min:", std.min().item(), "max:", std.max().item())
 
-            out = torch.cat([mean, std], dim=-1)
+        #     out = torch.cat([mean, std], dim=-1)
             
         return out

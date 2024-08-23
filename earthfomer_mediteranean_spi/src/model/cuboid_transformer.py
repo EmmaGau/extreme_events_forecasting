@@ -3077,6 +3077,8 @@ class CuboidTransformerModel(nn.Module):
             new_input_shape = self.initial_encoder.patch_merge.get_out_shape(self.input_shape)
             if self.season_float:
                 self.dec_final_proj = nn.Linear(self.base_units + 2, C_out)  # +2 pour year et season
+            if self.gaussian:
+                self.dec_final_proj = nn.Linear(self.base_units, 2*C_out)
             else:
                 self.dec_final_proj = nn.Linear(self.base_units, C_out)
             print("dec", self.dec_final_proj)
@@ -3118,6 +3120,8 @@ class CuboidTransformerModel(nn.Module):
             print("dec target shape list",dec_target_shape_list[-1][-1])
             if self.season_float:
                 self.dec_final_proj = nn.Linear(dec_target_shape_list[-1][-1] + 2, C_out)  # +2 pour year et season
+            if self.gaussian:
+                self.dec_final_proj = nn.Linear(dec_target_shape_list[-1][-1] + 2, 2*C_out) 
             else:
                 self.dec_final_proj = nn.Linear(dec_target_shape_list[-1][-1], C_out)
 
@@ -3224,18 +3228,14 @@ class CuboidTransformerModel(nn.Module):
         print(self.gaussian)
         eps = 1e-6
         if self.gaussian:
-            print("Before exp - min (mean):", out[..., 0:1].min().item(), "max (mean):", out[..., 0:1].max().item())
-            print("Before exp - min (std):", out[..., 1:2].min().item(), "max (std):", out[..., 1:2].max().item())
-
             # For Gaussian distribution, we assume out[..., 0:1] is the mean and out[..., 1:2] is the log of the standard deviation
+            # out est de la forme [B,T,H,W,C*2] tu peux flatten la derniere dim pour séparer min et max
+            out = out.view(B, T_out, H_out, W_out, C_out, 2)
             mean = out[..., 0:1]
-            std = torch.exp(out[..., 1:2])  # exponentiate to ensure the standard deviation is positive
+            std = torch.exp(out[..., 1:2])
 
             print("After exp - std min:", std.min().item(), "max:", std.max().item())
 
             out = torch.cat([mean, std], dim=-1)
-
-            # Print the min and max of the final output
-            print("Output - min:", out.min().item(), "max:", out.max().item())
             
         return out

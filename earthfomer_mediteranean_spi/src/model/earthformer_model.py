@@ -32,16 +32,19 @@ from utils.statistics import DataScaler
 from utils.temporal_aggregator import TemporalAggregatorFactory
 import time
 from torchmetrics import R2Score
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image
+import matplotlib.pyplot as plt
 
 _curr_dir = os.path.realpath(os.path.dirname(os.path.realpath(__file__)))
 exps_dir = os.path.join(_curr_dir, "experiments")
 pretrained_checkpoints_dir = cfg.pretrained_checkpoints_dir
 pytorch_state_dict_name = "earthformer_icarenso2021.pt"
 
-VAL_YEARS = [1999, 2010]
-TEST_YEARS = [2011, 2024]
-class CuboidERAModule(pl.LightningModule):
+VAL_YEARS = [2006,2015]
+TEST_YEARS = [2016, 2024]
 
+class CuboidERAModule(pl.LightningModule):
     def __init__(self,
                  total_num_steps: int,
                  config_file_path: str = "config.yaml",
@@ -219,7 +222,7 @@ class CuboidERAModule(pl.LightningModule):
         checkpoint_callback_loss = ModelCheckpoint(
             monitor="valid_loss_epoch",
             dirpath=os.path.join(self.save_dir, "checkpoints", "loss"),
-            filename="model-loss-{epoch:03d}",
+            filename="model-loss-{epoch:03d}_{valid_loss_epoch:.2f}",
             save_top_k=self.oc.optim.save_top_k,
             save_last=True,
             mode="min",
@@ -331,26 +334,29 @@ class CuboidERAModule(pl.LightningModule):
         
         return train_dataloader, val_dataloader, test_dataloader
 
-
     def forward(self, batch):
-        input, target, season_float, year_float, *_ = batch
+        input, target, season_float, year_float, clim_tensor, *_ = batch
         input = input.float() # (N, in_len, lat, lon, nb_target)
         target = target.float()# (N, in_len, lat, lon, nb_target)
+        clim_tensor = clim_tensor.float()
         season_float = season_float.float()
         year_float = year_float.float()
         pred_seq = self.torch_nn_module(input, season_float, year_float)
         print(pred_seq.shape, target.shape)
         loss = F.mse_loss(pred_seq, target)
-        return pred_seq, loss, input, target
+        return pred_seq, loss, input, target, clim_tensor
 
     def training_step(self, batch, batch_idx):
-        pred_seq, loss, input, target = self(batch)
-         # Calculer la MSE pour chaque variable
+        pred_seq, loss, input, target, clim_tensor = self(batch)
         mse_per_var = F.mse_loss(pred_seq, target, reduction='none').mean(dim=(0, 1, 2, 3))
-    
-        # Logguer la loss pour chaque variable
+        
         for i, mse in enumerate(mse_per_var):
             self.log(f'train_loss_var_{i}', mse, on_step=False, on_epoch=True)
+
+        # Calcul du skill score par rapport à la climatologie
+        mse_climatology = F.mse_loss(clim_tensor, target)
+        skill_score = 1 - (loss / mse_climatology)
+        self.log('train_skill_score', skill_score, on_step=False, on_epoch=True)
 
         micro_batch_size = input.shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
@@ -368,8 +374,7 @@ class CuboidERAModule(pl.LightningModule):
         micro_batch_size = batch[0].shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
         if not self.eval_example_only or data_idx in self.val_example_data_idx_list:
-            pred_seq, loss, in_seq, target_seq= self(batch)
-            # Calculer le MAE pour chaque variable
+            pred_seq, loss, in_seq, target_seq, clim_tensor = self(batch)
             mae_per_var = torch.abs(pred_seq - target_seq).mean(dim=(0, 1, 2, 3))
             for i, mae in enumerate(mae_per_var):
                 getattr(self, f'valid_mae_var_{i}')(pred_seq[..., i], target_seq[..., i])
@@ -383,25 +388,22 @@ class CuboidERAModule(pl.LightningModule):
                     mode="val", )
             self.valid_mse(pred_seq, target_seq)
             self.valid_mae(pred_seq, target_seq)
-            print("new shape",pred_seq.reshape(-1, pred_seq.shape[-1]).shape )
-            print("new shape target",target_seq.reshape(-1, target_seq.shape[-1]).shape )
             self.valid_r2(pred_seq.view(-1, self.output_shape[self.channel_axis-1]), 
               target_seq.view(-1, self.output_shape[self.channel_axis-1]))
             for i in range(self.output_shape[self.channel_axis-1]):
                 getattr(self, f'valid_r2_var_{i}')(pred_seq[..., i].view(-1, 1), target_seq[..., i].view(-1, 1))
 
-            # Calculer le skill score
+            # Calcul du skill score par rapport à la climatologie
             mse_model = F.mse_loss(pred_seq, target_seq)
-            mse_climatology = torch.mean(target_seq**2)  # Climatologie prédit 0
+            mse_climatology = F.mse_loss(clim_tensor, target_seq)
             skill_score = 1 - (mse_model / mse_climatology)
             num_variables = pred_seq.shape[-1]
             for i in range(num_variables):
                 mse_model_i = F.mse_loss(pred_seq[..., i], target_seq[..., i])
-                mse_climatology_i = torch.mean(target_seq[..., i]**2)
+                mse_climatology_i = F.mse_loss(clim_tensor[..., i], target_seq[..., i])
                 skill_score_i = 1 - (mse_model_i / mse_climatology_i)
                 self.log(f'valid_skill_score_var_{i}', skill_score_i, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
-            
             self.log('valid_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
             self.log('valid_skill_score', skill_score, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         
@@ -436,7 +438,7 @@ class CuboidERAModule(pl.LightningModule):
         micro_batch_size = batch[0].shape[self.batch_axis]
         data_idx = int(batch_idx * micro_batch_size)
         if not self.eval_example_only or data_idx in self.test_example_data_idx_list:
-            pred_seq, loss, in_seq, target_seq = self(batch)
+            pred_seq, loss, in_seq, target_seq, clim_tensor = self(batch)
             if self.local_rank == 0:
                 self.save_vis_step_end(
                     data_idx=data_idx,
@@ -444,12 +446,25 @@ class CuboidERAModule(pl.LightningModule):
                     target_seq=target_seq.detach().float().cpu().numpy(),
                     pred_seq=pred_seq.detach().float().cpu().numpy(),
                     mode="test", )
-            if self.precision == 16:
-                pred_seq = pred_seq.float()
+
             self.test_mse(pred_seq, target_seq)
             self.test_mae(pred_seq, target_seq)
 
-    def test_epoch_end(self, outputs):
+            # Calcul du skill score par rapport à la climatologie
+            mse_model = F.mse_loss(pred_seq, target_seq)
+            mse_climatology = F.mse_loss(clim_tensor, target_seq)
+            skill_score = 1 - (mse_model / mse_climatology)
+            num_variables = pred_seq.shape[-1]
+            for i in range(num_variables):
+                mse_model_i = F.mse_loss(pred_seq[..., i], target_seq[..., i])
+                mse_climatology_i = F.mse_loss(clim_tensor[..., i], target_seq[..., i])
+                skill_score_i = 1 - (mse_model_i / mse_climatology_i)
+                self.log(f'test_skill_score_var_{i}', skill_score_i, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
+            self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+            self.log('test_skill_score', skill_score, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+            
+    def on_test_epoch_end(self, outputs=None):
         test_mse = self.test_mse.compute()
         test_mae = self.test_mae.compute()
 
@@ -457,6 +472,7 @@ class CuboidERAModule(pl.LightningModule):
         self.log('test_mae_epoch', test_mae, prog_bar=True, on_step=False, on_epoch=True)
         self.test_mse.reset()
         self.test_mae.reset()
+
 
     def save_vis_step_end(
             self,
@@ -539,14 +555,32 @@ def main():
         config_file_path=args.cfg,
         input_shape = input_shape,
         output_shape = output_shape)
-    
+
     trainer_kwargs = pl_module.set_trainer_kwargs(
         devices=args.gpus,
         accumulate_grad_batches=accumulate_grad_batches,
     )
     trainer = Trainer(**trainer_kwargs)
 
+    checkpoint_callback_loss = ModelCheckpoint(
+            monitor="valid_loss_epoch",
+            dirpath=os.path.join(pl_module.save_dir, "checkpoints", "loss"),
+            filename="model-loss-{epoch:03d}",
+            save_top_k=oc_from_file.optim.save_top_k,
+            save_last=True,
+            mode="min",
+        )
+
+    # Train the model
     trainer.fit(model=pl_module, train_dataloaders=train_dl, val_dataloaders=val_dl)
+
+    # Load the best checkpoint
+    best_checkpoint_path = checkpoint_callback_loss.best_model_path
+    if best_checkpoint_path:
+        pl_module = CuboidERAModule.load_from_checkpoint(best_checkpoint_path)
+
+    # Run the test process
+    trainer.test(model=pl_module, dataloaders=test_dl)
 
 if __name__ == "__main__":
     main()

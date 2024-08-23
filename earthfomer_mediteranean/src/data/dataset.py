@@ -75,6 +75,7 @@ class DatasetEra(Dataset):
         self.coarse_s = ds_conf.get("coarse_s", False)
         self.coarse_t_target = ds_conf.get("coarse_t_target", True)
         self.coarse_s_target = ds_conf.get("coarse_s_target", False)
+        
         if "coarse" in wandb_config["scaler"].keys():
             self.coarse_t = wandb_config["scaler"]["coarse"]
             self.coarse_t_target = wandb_config["scaler"]["coarse"]
@@ -83,7 +84,7 @@ class DatasetEra(Dataset):
     
     def _load_data(self, dir_path):
         """Load data from a specified directory using xarray."""
-        ds = xr.open_dataset(dir_path, chunks = None)
+        ds = xr.open_dataset(dir_path)
         return ds
     
     def compute_climatology(self):

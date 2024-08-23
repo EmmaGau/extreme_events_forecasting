@@ -22,11 +22,12 @@ from utils.tools import AreaDataset
 MAPPING_SEASON= {"DJF": 0, "MAM": 1, "JJA": 2, "SON": 3}
 
 class TemporalAggregator:
-    def __init__(self, dataset: xr.Dataset, target: xr.Dataset,  in_len : int,out_len : int, resolution_input : int, resolution_output: int, gap : int =1):
+    def __init__(self, dataset: xr.Dataset, target: xr.Dataset, clim: xr.Dataset, in_len: int, out_len: int, resolution_input: int, resolution_output: int, gap: int = 1):
         self.name = "TemporalAggregator"
         # dataset parameters 
         self.dataset = dataset
         self.target = target
+        self.clim = clim
 
         # aggregation parameters
         self.in_len = in_len
@@ -39,91 +40,128 @@ class TemporalAggregator:
         self.wet_season_data = self._group_by_wet_season(self.dataset)
         self.wet_season_target = self._group_by_wet_season(self.target)
 
-        # initialize temporal index
-        self._current_temporal_idx = 0
-        self.current_wet_season_year = list(self.wet_season_data.groups.keys())[0]
-        self._temporal_idx_maping = {}
+        # Print statements to check grouping
+        print(f"Wet seasons in dataset: {list(self.wet_season_data.groups.keys())}")
+        print(f"Wet seasons in target: {list(self.wet_season_target.groups.keys())}")
+
+        self._index_mapping = self._create_index_mapping()
+        print(f"Index mapping created with {len(self._index_mapping)} entries.")
+
         self.date_encoder = {}
         self.date_decoder = {}
         self._encode_all_dates()
 
     def _encode_all_dates(self):
         all_dates = set(self.dataset.time.values) | set(self.target.time.values)
+        print("All dates combined:", sorted(all_dates))
         for i, date in enumerate(sorted(all_dates)):
             date_str = pd.Timestamp(date).strftime('%Y-%m-%d')
             self.date_encoder[date_str] = i
             self.date_decoder[i] = date_str
+        print("Date encoder:", self.date_encoder)
+        print("Date decoder:", self.date_decoder)
 
     def _encode_date(self, date):
         date_str = pd.Timestamp(date).strftime('%Y-%m-%d')
-        return self.date_encoder[date_str]
+        encoded_date = self.date_encoder[date_str]
+        print(f"Encoded date {date_str} as {encoded_date}")
+        return encoded_date
 
     def _decode_date(self, encoded_date):
-        return self.date_decoder[encoded_date]
+        decoded_date = self.date_decoder[encoded_date]
+        print(f"Decoded date {encoded_date} as {decoded_date}")
+        return decoded_date
         
     def _group_by_wet_season(self, data):
         self.start_month = 10
-        data['wet_season_year']= data.time.dt.year*(data.time.dt.month>=self.start_month) + (data.time.dt.year-1)*(data.time.dt.month<self.start_month)
+        data['wet_season_year'] = data.time.dt.year * (data.time.dt.month >= self.start_month) + (data.time.dt.year - 1) * (data.time.dt.month < self.start_month)
         grouped_data = data.groupby('wet_season_year')
         return grouped_data
-    
-    def _compute_number_samples_in_season(self, wet_season_data: xr.DataArray):
-        width_input = self.in_len*self.resolution_input
-        width_output = self.out_len*self.resolution_output
-        total_width = width_input + width_output
-        total_lenght = len(wet_season_data.time.values)
-        return ((total_lenght - total_width)//self.gap) +1
-    
-    def compute_len_dataset(self):
-        length = 0
-        for _, wet_season in self.wet_season_data:
-            length += self._compute_number_samples_in_season(wet_season)
-        return length
+
+    def _get_clim_data(self, time_indexes):
+        days_of_year = [pd.Timestamp(date).dayofyear for date in time_indexes]
+        print(f"Days of year for climate data: {days_of_year}")
+        clim_data = self.clim.sel(dayofyear=days_of_year)
+        print(f"Retrieved climate data for {len(days_of_year)} days.")
+        return clim_data
+
+    def _create_index_mapping(self):
+        index_mapping = {}
+        total_samples = 0
+        
+        for year, wet_season in self.wet_season_data:
+            width_input = self.in_len * self.resolution_input
+            width_output = self.out_len * self.resolution_output
+            total_width = width_input + width_output
+            season_length = len(wet_season.time.values)
+
+            print(f"Processing wet season year {year} with {season_length} days.")
+            
+            if season_length >= total_width:
+                num_samples = ((season_length - total_width) // self.gap) + 1
+                print(f"  -> Generating {num_samples} samples for this season.")
+                
+                for local_idx in range(num_samples):
+                    index_mapping[total_samples + local_idx] = {
+                        'wet_season_year': year,
+                        'local_idx': local_idx * self.gap
+                    }
+
+                total_samples += num_samples
+            else:
+                print(f"  -> Not enough data for this season. Required: {total_width}, Available: {season_length}.")
+        
+        print(f"Total samples across all seasons: {total_samples}")
+        return index_mapping
 
     def aggregate(self, idx: int):
-        input_data = []
-        target_data = []
-        wet_season = self.wet_season_data[self.current_wet_season_year]
-        wet_season_target = self.wet_season_target[self.current_wet_season_year]
+        # Récupérer la saison humide et l'indice local à partir du mapping
+        mapping = self._index_mapping[idx]
+        year = mapping['wet_season_year']
+        local_idx = mapping['local_idx']
+        print(f"\nAggregating for idx {idx}: year {year}, local_idx {local_idx}")
+
+        wet_season = self.wet_season_data[year]
+        wet_season_target = self.wet_season_target[year]
 
         width_input = self.in_len * self.resolution_input
         width_output = self.out_len * self.resolution_output
 
-        if self._current_temporal_idx + width_input + width_output >= len(wet_season.time.values):
-            self.current_wet_season_year += 1
-            self._current_temporal_idx = 0
-            wet_season = self.wet_season_data[self.current_wet_season_year]
-            wet_season_target = self.wet_season_target[self.current_wet_season_year]
+        # Récupérer les données d'entrée et de sortie
+        input_time_indexes = wet_season.time.values[local_idx:local_idx + width_input:self.resolution_input]
+        target_time_indexes = wet_season_target.time.values[local_idx + width_input:local_idx + width_input + width_output:self.resolution_output]
+        print(f"  -> Input time indexes: {input_time_indexes}")
+        print(f"  -> Target time indexes: {target_time_indexes}")
 
-        first_time_value = wet_season.time.dt.season.values[self._current_temporal_idx]
-        self.season_float = MAPPING_SEASON[str(first_time_value)]/4
+        input_data = wet_season.sel(time=input_time_indexes)
+        target_data = wet_season_target.sel(time=target_time_indexes)
+        clim_input_data = self._get_clim_data(input_time_indexes)
+        clim_target_data = self._get_clim_data(target_time_indexes)
 
+        # Calculer les floats pour la saison et l'année
+        first_time_value = wet_season.time.dt.season.values[local_idx]
+        season_float = MAPPING_SEASON[str(first_time_value)] / 4
         first_year = 1940
         last_year = 2024
-        self.year_float = (self.current_wet_season_year - first_year) / (last_year - first_year)
-
-        # Sélectionner les données d'entrée
-        input_time_indexes = wet_season.time.values[self._current_temporal_idx:self._current_temporal_idx + width_input:self.resolution_input]
-        input_data = wet_season.sel(time=input_time_indexes)
-
-        # Sélectionner les données de sortie
-        start_idx_output = self._current_temporal_idx + width_input
-        target_time_indexes = wet_season_target.time.values[start_idx_output:start_idx_output + width_output:self.resolution_output]
-        target_data = wet_season_target.sel(time=target_time_indexes)
-
-        # Mettre à jour l'index temporel pour la prochaine itération
-        self._current_temporal_idx += self.gap
-        self._temporal_idx_maping[idx] = self._current_temporal_idx
+        year_float = (year - first_year) / (last_year - first_year)
+        print(f"  -> Season float: {season_float}, Year float: {year_float}")
 
         # Encoder les indices temporels
         encoded_input_time_indexes = [self._encode_date(date) for date in input_time_indexes]
         encoded_target_time_indexes = [self._encode_date(date) for date in target_time_indexes]
 
-        return input_data, target_data, self.season_float, self.year_float, encoded_input_time_indexes, encoded_target_time_indexes
+        return input_data, target_data, clim_target_data, season_float, year_float, encoded_input_time_indexes, encoded_target_time_indexes
+
+    def compute_len_dataset(self):
+        dataset_length = len(self._index_mapping)
+        print(f"Computed dataset length: {dataset_length}")
+        return dataset_length
     
     def decode_time_indexes(self, encoded_indexes_array):
-        return [[self._decode_date(int(idx)) for idx in encoded_indexes_array[i]] for i in range(len(encoded_indexes_array))]
-    
+        decoded_indexes = [[self._decode_date(int(idx)) for idx in encoded_indexes_array[i]] for i in range(len(encoded_indexes_array))]
+        print(f"Decoded time indexes: {decoded_indexes}")
+        return decoded_indexes
+
 class TemporalAggregatorFactory:
     def __init__(self, config):
         self.in_len = config['in_len']
@@ -132,11 +170,12 @@ class TemporalAggregatorFactory:
         self.resolution_output = config['resolution_output']
         self.gap = config['gap']
 
-    def create_aggregator(self, dataset : xr.Dataset, target: xr.Dataset) -> TemporalAggregator:
+    def create_aggregator(self, dataset : xr.Dataset, target: xr.Dataset, clim: xr.Dataset):
         
         return TemporalAggregator(
             dataset=dataset,
             target = target,
+            clim=clim,
             in_len=self.in_len,
             out_len=self.out_len,
             resolution_input=self.resolution_input,
