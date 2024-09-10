@@ -4,7 +4,7 @@ layout:
 data:
   data_dirs:
       mediteranean:
-        spi: '/home/egauillard/data/SPI_14_cal_1940_1990_era5_MED_1degr_19400101_20240229_new.nc'
+        spi: '/home/egauillard/data/SPI_7_era5_MED_1degr_19400101_20240229_new.nc'
         t2m: "/home/egauillard/data/T2M_era5_MED_1degr_19400101-20240229.nc"
       north_hemisphere: 
         msl:  "/home/egauillard/data/MSLP_era5_NHExt_1degr_19400101_20240229_new.nc"
@@ -17,24 +17,25 @@ data:
     variables_tropics: ['ttr']
     variables_med: ['spi', 't2m']
     target_variables: ['spi']
-    relevant_years: [1940, 1990]
+    relevant_years: [1940, 2005]
     relevant_months: [10, 11, 12, 1, 2, 3]
-    scaling_years: [1940, 1990]
+    scaling_years: [1940, 2005]
     land_sea_mask: '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc'
     spatial_resolution: 1
     predict_sea_land: false 
     out_spatial_resolution: 10
-
+    coarse_t : true
+    coarse_s : true
+    coarse_s_target: false
+    coarse_t_target: false
 
   scaler:
     mode: 'standardize'
-    coarse: True
-    coarse_spatial : True
   temporal_aggregator:
     in_len: 6
     out_len: 3
-    resolution_input: 14
-    resolution_output: 14
+    resolution_input: 7
+    resolution_output: 7
     gap: 3
 
 model:

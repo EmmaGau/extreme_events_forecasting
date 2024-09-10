@@ -1,8 +1,4 @@
 layout:
-  in_len: 12
-  out_len: 14
-  img_height: 24
-  img_width: 48
   layout: "NTHWC"
 
 data:
@@ -14,30 +10,34 @@ data:
         msl:  "/home/egauillard/data/MSLP_era5_NHExt_1degr_19400101_20240229_new.nc"
         sst: "/home/egauillard/data/SST_era5_NHExt_1degr_19400101-20240229_new.nc"
         stream: "/home/egauillard/data/STREAM500_era5_NHExt_1degr_19400101_20240229_new.nc"
+      tropics:
         ttr: "/home/egauillard/data/OLR_era5_tropics_1degr_19400101_20240229.nc"
   dataset:
     variables_nh: ["stream", "sst", "msl"]
+    variables_tropics: ['ttr']
     variables_med: ['tp', 't2m']
-    target_variable: 'tp'
-    relevant_years: [1940, 1990]
+    target_variables: ['tp']
+    relevant_years: [1940, 1998]
     relevant_months: [10, 11, 12, 1, 2, 3]
-    scaling_years: [1940, 1990]
+    scaling_years: [1940, 1998]
     land_sea_mask: '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc'
     spatial_resolution: 1
     predict_sea_land: false 
-    out_spatial_resolution : 1
-    scale_target: false
+    out_spatial_resolution: 10
+    sum_pr: True
   scaler:
     mode: 'standardize'
+    coarse: True
+    coarse_spatial : True
   temporal_aggregator:
-    in_len: 3
+    in_len: 6
     out_len: 3
     resolution_input: 7
     resolution_output: 7
-    gap: 1
+    gap: 3
+
 
 model:
-  gamma: true
   data_channels: 5
   input_shape: [3, 111, 360, 5]
   target_shape: [3, 15, 50, 2]
@@ -108,7 +108,7 @@ optim:
   save_top_k: 1
 
 logging:
-  logging_prefix: "earthformer"
+  logging_prefix: "earthformer_prob"
   monitor_lr: true
   monitor_device: false
   track_grad_norm: -1

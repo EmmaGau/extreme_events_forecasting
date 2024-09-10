@@ -345,7 +345,7 @@ class CuboidERAModule(pl.LightningModule):
 
     def forward(self, batch):
         input, target, season_float, year_float, clim_tensor, *_ = batch
-        input = input.float() # (N, in_len, lat, lon, nb_target)
+        input = input.float().requires_grad_() # (N, in_len, lat, lon, nb_target)
         target = target.float()# (N, in_len, lat, lon, nb_target)
         clim_tensor = clim_tensor.float()
         season_float = season_float.float()
@@ -354,6 +354,20 @@ class CuboidERAModule(pl.LightningModule):
         print(pred_seq.shape, target.shape)
         loss = F.mse_loss(pred_seq, target)
         return pred_seq, loss, input, target, clim_tensor
+    
+    def compute_saliency_map(self, batch):
+        pred_seq, loss, input, target, clim_tensor = self.forward(batch)
+        
+        # Backpropagate to compute the gradient of the loss with respect to the input
+        loss.backward()
+        
+        # Saliency is the absolute value of the gradient
+        saliency = input.grad.data.abs()
+        
+        # Optionally, take the maximum across the channel dimension if input has multiple channels
+        saliency, _ = torch.max(saliency, dim=1)  # This reduces the saliency map to (N, lat, lon)
+        
+        return saliency
 
     def training_step(self, batch, batch_idx):
         pred_seq, loss, input, target, clim_tensor = self(batch)

@@ -3239,3 +3239,146 @@ class CuboidTransformerModel(nn.Module):
         #     out = torch.cat([mean, std], dim=-1)
             
         return out
+
+# if __name__ == "__main__":
+#     import torch
+#     import torch.nn.functional as F
+#     import numpy as np
+#     import matplotlib.pyplot as plt
+
+#     class MultiLayerGradCAM:
+#         def __init__(self, model, target_layers):
+#             self.model = model
+#             self.target_layers = target_layers
+#             self.activations = {layer: None for layer in target_layers}
+#             self.gradients = {layer: None for layer in target_layers}
+            
+#             for layer in target_layers:
+#                 layer.register_forward_hook(self.save_activation(layer))
+#                 layer.register_backward_hook(self.save_gradient(layer))
+        
+#         def save_activation(self, layer):
+#             def hook(module, input, output):
+#                 self.activations[layer] = output
+#             return hook
+        
+#         def save_gradient(self, layer):
+#             def hook(module, grad_input, grad_output):
+#                 self.gradients[layer] = grad_output[0]
+#             return hook
+        
+#         def generate_cam(self, input_tensor, target_output_index=None):
+#             # Forward pass
+#             model_output = self.model(input_tensor)
+            
+#             # Backward pass
+#             self.model.zero_grad()
+#             if target_output_index is not None:
+#                 loss = model_output[0, target_output_index]
+#             else:
+#                 loss = torch.sum(model_output)
+#             loss.backward()
+            
+#             cams = []
+#             for layer in self.target_layers:
+#                 # Calculer les poids
+#                 pooled_gradients = torch.mean(self.gradients[layer], dim=[0, 2, 3, 4])
+                
+#                 # Pondérer les activations par les gradients
+#                 activations = self.activations[layer]
+#                 for i in range(activations.size(1)):
+#                     activations[:, i, :, :, :] *= pooled_gradients[i]
+                
+#                 # Moyenne sur les canaux
+#                 heatmap = torch.mean(activations, dim=1).squeeze()
+                
+#                 # ReLU sur la heatmap
+#                 heatmap = F.relu(heatmap)
+                
+#                 # Normaliser
+#                 heatmap /= torch.max(heatmap)
+                
+#                 cams.append(heatmap)
+            
+#             # Combiner les CAMs (simple moyenne ici, mais vous pouvez ajuster)
+#             combined_cam = torch.mean(torch.stack(cams), dim=0)
+            
+#             return combined_cam
+
+#     # Utilisation
+#     model =  CuboidTransformerModel(input_shape = (5, 64, 64, 10), output_shape = (1, 20, 20, 10))
+#     target_layers = [
+#         model.encoder.blocks[0].attn_l[-1],
+#         model.encoder.blocks[-1].attn_l[-1],
+#         model.decoder.blocks[-1].attn_l[-1]  
+#     ]
+#     grad_cam = MultiLayerGradCAM(model, target_layers)
+
+#     # Générer la CAM combinée
+#     input_tensor = torch.randn(1, 5, 64, 64, 10)  # Ajustez selon votre format d'entrée
+#     combined_cam = grad_cam.generate_cam(input_tensor)
+
+#     # Visualisation
+#     plt.imshow(combined_cam.mean(axis=-1).cpu().numpy(), cmap='hot')
+#     plt.title("Combined Multi-Layer Grad-CAM")
+#     plt.colorbar()
+#     plt.show()
+
+# class CuboidTransformerModelWithHooks(CuboidTransformerModel):
+#     def __init__(self, *args, **kwargs):
+#         super(CuboidTransformerModelWithHooks, self).__init__(*args, **kwargs)
+#         self.activations = []
+#         self.gradients = []
+        
+#         self.activations = []
+#         self.gradients = []
+        
+#         # Attach hooks to capture activations and gradients
+#         def activation_hook(module, input, output):
+#             self.activations.append(output)
+        
+#         def gradient_hook(module, grad_input, grad_output):
+#             self.gradients.append(grad_output[0])
+        
+#         for layer in self.encoder.blocks:
+#             layer.attn.register_forward_hook(activation_hook)
+#             layer.attn.register_backward_hook(gradient_hook)
+        
+#         for layer in self.decoder.transformer_blocks:
+#             layer.attn.register_forward_hook(activation_hook)
+#             layer.attn.register_backward_hook(gradient_hook)
+
+
+
+#     def compute_grad_cam(self, x, year_float, season_float):
+#         self.activations = []
+#         self.gradients = []
+        
+#         output = self.forward(x, year_float, season_float)
+#         loss = F.mse_loss(output, target)  # Assuming target is available in context
+        
+#         self.zero_grad()
+#         loss.backward()
+        
+#         # Get the last activation and gradient
+#         activation = self.activations[-1]
+#         gradient = self.gradients[-1]
+        
+#         # Pool the gradients across the spatial dimensions
+#         pooled_gradients = torch.mean(gradient, dim=[0, 2, 3])
+        
+#         # Weight the channels by the pooled gradients
+#         weighted_activation = activation * pooled_gradients.view(1, -1, 1, 1)
+#         grad_cam = torch.mean(weighted_activation, dim=1)
+        
+#         # Apply ReLU and normalization
+#         grad_cam = F.relu(grad_cam)
+#         grad_cam -= grad_cam.min()
+#         grad_cam /= grad_cam.max()
+        
+#         return grad_cam
+
+#     def forward(self, x, year_float, season_float, verbose=False):
+#         # Forward pass as usual
+#         output = super().forward(x, year_float, season_float, verbose)
+#         return output

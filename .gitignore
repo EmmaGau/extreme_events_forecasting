@@ -12,6 +12,6 @@ experiments
 *.out
 *.png
 results
-
+*.csv
 
 lightning_logs

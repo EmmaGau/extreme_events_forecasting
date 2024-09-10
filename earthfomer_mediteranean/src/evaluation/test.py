@@ -482,116 +482,58 @@ class Evaluation:
         for var in self.test_dataset.target_variables:
             lats = [30] + list(self.all_datasets_ground_truth[0].latitude.values) + [45]
             lons = [-10] + list(self.all_datasets_ground_truth[0].longitude.values) + [40]
+            def symmetric_limits(data):
+                abs_max = max(abs(data.min()), abs(data.max()))
+                return -abs_max, abs_max
+            def pos_limits(data):
+                lim_max = max(data)
+                return 0, lim_max
 
-            # Plot spatial relative MSE for model
-            fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
-            im = ax.imshow(self.spatial_relative_mse_model[var], cmap='YlOrRd', transform=ccrs.PlateCarree(),
-                           extent=[lons[0], lons[-1], lats[0], lats[-1]])
-            ax.coastlines(resolution='50m', color='black', linewidth=0.5)
-            ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
-            ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
-            ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
-            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                              linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
-            gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
-            gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
-            gl.top_labels = False
-            gl.right_labels = False
-            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
-            cbar.set_label(f'Relative MSE - {var}', fontsize=12)
-            plt.title(f'Relative Spatial MSE - Model - {var}', fontsize=16)
-            plt.tight_layout()
-            plt.savefig(os.path.join(self.save_folder, f'{var}_spatial_relative_mse_model.png'), 
-                        bbox_inches='tight', dpi=300)
-            plt.close()
+            # Calculer les valeurs min et max symétriques pour chaque type de plot
+            vmin_relative, vmax_relative = pos_limits(np.concatenate([
+                self.spatial_relative_mse_model[var].flatten(),
+                self.spatial_relative_mse_climatology[var].flatten()
+            ]))
+            
+            vmin_rmse, vmax_rmse = pos_limits(np.concatenate([
+                self.spatial_rmse_model[var].flatten(),
+                self.spatial_rmse_climatology[var].flatten()
+            ]))
 
-            # Plot spatial relative MSE for climatology
-            fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
-            im = ax.imshow(self.spatial_relative_mse_climatology[var], cmap='YlOrRd', transform=ccrs.PlateCarree(),
-                           extent=[lons[0], lons[-1], lats[0], lats[-1]])
-            ax.coastlines(resolution='50m', color='black', linewidth=0.5)
-            ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
-            ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
-            ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
-            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                              linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
-            gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
-            gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
-            gl.top_labels = False
-            gl.right_labels = False
-            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
-            cbar.set_label(f'Relative MSE - {var}', fontsize=12)
-            plt.title(f'Relative Spatial MSE - Climatology - {var}', fontsize=16)
-            plt.tight_layout()
-            plt.savefig(os.path.join(self.save_folder, f'{var}_spatial_relative_mse_climatology.png'), 
-                        bbox_inches='tight', dpi=300)
-            plt.close()
+                # Fonction pour créer un plot
+            def create_plot(data, title, filename, vmin, vmax, label=None, cmap : str = 'RdBu_r'):
+                fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
+                im = ax.imshow(data, cmap=cmap, transform=ccrs.PlateCarree(),
+                            extent=[lons[0], lons[-1], lats[0], lats[-1]],
+                            vmin=vmin, vmax=vmax)
+                ax.coastlines(resolution='50m', color='black', linewidth=0.5)
+                ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
+                ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
+                ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
+                gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                                linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+                gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
+                gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
+                gl.top_labels = False
+                gl.right_labels = False
+                
+                cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08, extend='both')
+                if label:
+                    cbar.set_label(label, fontsize=12)
+                
+                plt.title(title, fontsize=16)
+                plt.tight_layout()
+                plt.savefig(os.path.join(self.save_folder, filename), 
+                            bbox_inches='tight', dpi=300)
+                plt.close()
 
-            # Plot spatial RMSE for model
-            fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
-            im = ax.imshow(self.spatial_rmse_model[var], cmap='YlOrRd', transform=ccrs.PlateCarree(),
-                           extent=[lons[0], lons[-1], lats[0], lats[-1]])
-            ax.coastlines(resolution='50m', color='black', linewidth=0.5)
-            ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
-            ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
-            ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
-            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                              linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
-            gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
-            gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
-            gl.top_labels = False
-            gl.right_labels = False
-            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
-            cbar.set_label(f'RMSE - {var}', fontsize=12)
-            plt.title(f'Spatial RMSE in {self.unity[var]}- Model - {var}', fontsize=16)
-            plt.tight_layout()
-            plt.savefig(os.path.join(self.save_folder, f'{var}_spatial_rmse_model.png'), 
-                        bbox_inches='tight', dpi=300)
-            plt.close()
+            # Plot Relative MSE
+            create_plot(self.spatial_relative_mse_model[var], f'Relative MSE Model - {var}', f'{var}_spatial_relative_mse_model.png', vmin_relative, vmax_relative, 'Relative MSE', 'RdBu_r')
+            create_plot(self.spatial_relative_mse_climatology[var], f'Relative MSE Climatology - {var}', f'{var}_spatial_relative_mse_climatology.png', vmin_relative, vmax_relative, 'Relative MSE', 'RdBu_r')
+            create_plot(self.spatial_rmse_model[var], f'RMSE Model - {var}', f'{var}_spatial_rmse_model.png', vmin_rmse, vmax_rmse, f'RMSE in {self.unity[var]}', 'RdBu_r')
+            create_plot(self.spatial_rmse_climatology[var], f'RMSE Climatology - {var}', f'{var}_spatial_rmse_climatology.png', vmin_rmse, vmax_rmse, f'RMSE in {self.unity[var]}', 'RdBu_r')
+            create_plot(self.spatial_rmse_model[var] - self.spatial_rmse_climatology[var], f'Difference RMSE Model - Climatology - {var}', f'{var}_spatial_rmse_diff.png', -3, 3, f'RMSE in {self.unity[var]}', 'bwr')
 
-            # Plot spatial RMSE for climatology
-            fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
-            im = ax.imshow(self.spatial_rmse_climatology[var], cmap='YlOrRd', transform=ccrs.PlateCarree(),
-                           extent=[lons[0], lons[-1], lats[0], lats[-1]])
-            ax.coastlines(resolution='50m', color='black', linewidth=0.5)
-            ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
-            ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
-            ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
-            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                              linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
-            gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
-            gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
-            gl.top_labels = False
-            gl.right_labels = False
-            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
-            cbar.set_label(f'RMSE - {var}', fontsize=12)
-            plt.title(f'Spatial RMSE - Climatology in {self.unity[var]}- {var}', fontsize=16)
-            plt.tight_layout()
-            plt.savefig(os.path.join(self.save_folder, f'{var}_spatial_rmse_climatology.png'), 
-                        bbox_inches='tight', dpi=300)
-            plt.close()
-
-             # Plot spatial RMSE model - RMSE climatology
-            fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
-            im = ax.imshow(self.spatial_rmse_model[var]- self.spatial_rmse_climatology[var], cmap='YlOrRd', transform=ccrs.PlateCarree(),
-                           extent=[lons[0], lons[-1], lats[0], lats[-1]])
-            ax.coastlines(resolution='50m', color='black', linewidth=0.5)
-            ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
-            ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
-            ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
-            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                              linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
-            gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
-            gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
-            gl.top_labels = False
-            gl.right_labels = False
-            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
-            cbar.set_label(f'RMSE - {var}', fontsize=12)
-            plt.title(f'Spatial RMSE model - RMSE climatology - {var} in {self.unity[var]}', fontsize=16)
-            plt.tight_layout()
-            plt.savefig(os.path.join(self.save_folder, f'{var}_spatial_rmse_model_climatology.png'),
-                        bbox_inches='tight', dpi=300)
-            plt.close()
 
     def save_mse_to_csv(self):
         df = pd.DataFrame()
@@ -680,10 +622,11 @@ if __name__ == "__main__":
     dataset_cfg = OmegaConf.to_object(oc.data)
     test_config = dataset_cfg.copy()
     test_config['dataset']['relevant_years'] = [2016, 2024]
+    lead_time = dataset_cfg['temporal_aggregator']['out_len']
 
     data_dirs = dataset_cfg['data_dirs']
     scaler = DataScaler(dataset_cfg['scaler'])
-    dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['resolution_output']
+    dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['resolution_output']* lead_time
 
     temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'])
 

@@ -16,24 +16,27 @@ data:
     variables_nh: ["stream", "sst", "msl"]
     variables_tropics: ['ttr']
     variables_med: ['tp', 't2m']
-    target_variables: ['tp', 't2m']
-    relevant_years: [1940, 1990]
+    target_variables: ['tp']
+    relevant_years: [1940,2005]
     relevant_months: [10, 11, 12, 1, 2, 3]
-    scaling_years: [1940, 1990]
+    scaling_years: [1940,2005]
     land_sea_mask: '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc'
     spatial_resolution: 1
     predict_sea_land: false 
     out_spatial_resolution: 10
     sum_pr: True
+    coarse_t : false
+    coarse_s : false
+    coarse_s_target: false
+    coarse_t_target: false
   scaler:
     mode: 'standardize'
-    coarse: True
   temporal_aggregator:
     in_len: 6
-    out_len: 3
+    out_len: 4
     resolution_input: 7
     resolution_output: 7
-    gap: 7
+    gap: 4
 
 model:
   season_float: false
@@ -52,7 +55,7 @@ model:
   use_dec_self_global: true
   dec_self_update_global: true
   use_dec_cross_global: true
-  use_global_vector_ffn: false
+  use_global_vector_ffn: true
   use_global_self_attn: true
   separate_global_qkv: false
   global_dim_ratio: 1
@@ -68,7 +71,7 @@ model:
   gated_ffn: false
   norm_layer: "layer_norm"
   padding_type: "zeros"
-  pos_embed_type: "t+hw"
+  pos_embed_type: "t+h+w"
   use_relative_pos: true
   self_attn_use_final_proj: true
   dec_use_first_self_attn: false
@@ -86,12 +89,12 @@ model:
   norm_init_mode: "0"
 
 optim:
-  seed: null
+  seed: 20
   total_batch_size: 64
   micro_batch_size: 8
   method: "adamw"
-  lr: 0.001
-  wd: 0.00001
+  lr: 0.0001
+  wd: 0.0001
   gradient_clip_val: 1.0
   max_epochs: 100
   warmup_percentage: 0.2
@@ -100,11 +103,11 @@ optim:
   warmup_min_lr_ratio: 0.1
   early_stop: false
   early_stop_mode: "min"
-  early_stop_patience: 5
-  save_top_k: 1
+  early_stop_patience: 10
+  save_top_k: 2
 
 logging:
-  logging_prefix: "earthformer_exp"
+  logging_prefix: "earthformer_mediteranean"
   monitor_lr: true
   monitor_device: false
   track_grad_norm: -1
