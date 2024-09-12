@@ -20,10 +20,10 @@ class Encoder(nn.Module):
         modules = []
         for i, h_dim in enumerate(hidden_dims):
             # Changement ici : on met la stride temporelle à 2 pour les deux dernières couches
-            if i >= len(hidden_dims) - 2:
-                stride = (2, 2, 2)
+            if i >= len(hidden_dims) - 1:
+                stride = (1, 2, 4)
             else:
-                stride = (1, 2, 2)
+                stride = (2, 2, 2)
             
             modules.append(
                 nn.Sequential(
@@ -48,10 +48,13 @@ class Encoder(nn.Module):
         t, h, w = input_dims
         for i in range(num_layers):
             # Changement ici : on réduit t deux fois au lieu d'une
-            if i >= num_layers - 2:
+            if i >= num_layers - 1:
+                w = (w - 1) // 4 + 1
+                h = (h - 1) // 2 + 1
+            else:
                 t = (t - 1) // 2 + 1
-            h = (h - 1) // 2 + 1
-            w = (w - 1) // 2 + 1
+                h = (h - 1) // 2 + 1
+                w = (w - 1) // 2 + 1
         return (t, h, w)
 
     def init_attention(self):
@@ -208,11 +211,11 @@ class BetaVAE3D(nn.Module):
         self.decoder = Decoder(latent_dim, hidden_dims, input_dims, output_dims, layout)
 
 
-    def forward(self, input: torch.Tensor) -> List[torch.Tensor]:
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> List[torch.Tensor]:
         mu, log_var = self.encoder(input)
         z = self.reparameterize(mu, log_var)
         result = self.decoder(z)
-        return [result, input, mu, log_var]
+        return [result, target, mu, log_var]
 
     def reparameterize(self, mu: torch.Tensor, log_var: torch.Tensor) -> torch.Tensor:
         std = torch.exp(0.5 * log_var)
@@ -222,12 +225,14 @@ class BetaVAE3D(nn.Module):
     def loss_function(self, *args, **kwargs) -> dict:
         self.num_iter += 1
         pred = args[0]
-        input = args[1]
+        target = args[1]
         mu = args[2]
         log_var = args[3]
         kld_weight = kwargs['M_N']  # Account for the minibatch samples from the dataset
+        print('target and pred shape')
+        print(pred.shape, target.shape)
 
-        pred_loss = F.mse_loss(pred, input)
+        pred_loss = F.mse_loss(pred, target)
 
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0)
 
@@ -253,8 +258,8 @@ class BetaVAE3D(nn.Module):
 
 if __name__ == '__main__':
     # Test the BetaVAE3D model
-    x = torch.randn(1, 6, 64, 64, 6)  # (B, T, H, W, C)
-    model = BetaVAE3D(layout = "THWC",latent_dim=10, input_dims=(6, 64, 64, 6), output_dims = (4, 20, 20, 1))
+    x = torch.randn(1,6, 111, 360, 6) # (B, T, H, W, C)
+    model = BetaVAE3D(layout = "THWC",latent_dim=10, input_dims=(6, 111, 360, 6), output_dims = (4, 1, 5, 1))
 
     output = model(x)
     print(output[2].shape)

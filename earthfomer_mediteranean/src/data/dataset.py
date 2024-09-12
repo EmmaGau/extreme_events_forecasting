@@ -50,6 +50,8 @@ class DatasetEra(Dataset):
         self.resolution_input = self.aggregator_factory.resolution_input
         self.resolution_output = self.aggregator_factory.resolution_output
         self.data, self.target = self._load_and_prepare_data()
+        self.data.to_netcdf("data_coarse.nc")
+        self.target.to_netcdf("target_coarse.nc")
         self.scaled_clim = self.get_scaled_climatology()
 
         self.aggregator = self.aggregator_factory.create_aggregator(self.data, self.target, self.scaled_clim)
@@ -414,12 +416,12 @@ if __name__ == "__main__":
         'land_sea_mask': '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc',
         'spatial_resolution': 1,
         'predict_sea_land': False,
-        'out_spatial_resolution': 15,
+        'out_spatial_resolution': 10,
         'sum_pr': True,
-        "coarse_t": False,
-        "coarse_s": False,
+        "coarse_t": True,
+        "coarse_s": True,
         "coarse_t_target": True,
-        "coarse_s_target": False
+        "coarse_s_target": True
     },
     'scaler': {
         'mode': 'standardize',
@@ -430,6 +432,7 @@ if __name__ == "__main__":
         'resolution_input': 7,
         'resolution_output': 7,
         'gap': 1,
+        'lead_time_gap': 0
     }
 }
 

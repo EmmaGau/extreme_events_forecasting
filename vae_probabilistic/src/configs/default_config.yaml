@@ -1,0 +1,68 @@
+model:
+  latent_dim : 10
+  hidden_dims : [32, 64, 128, 256, 512]
+  beta: 4
+  layout: "THWC"
+  gamma: 1000.
+  max_capacity: 25
+  Capacity_max_iter: 100000
+  loss_type: 'B'
+  num_heads: 8
+  use_attention: False
+
+optim:
+  seed: 0
+  max_epochs: 100
+  batch_size: 32
+  save_top_k: 2
+  lr: 0.0001
+
+logging:
+  project_name: "vae_era"
+  log_every_n_steps: 1
+
+trainer:
+  check_val_every_n_epoch: 1
+  log_step_ratio: 0.001
+  precision: 32
+
+data:
+  dataset:
+    variables_nh: ["stream", "sst", "msl"]
+    variables_tropics: ['ttr']
+    variables_med: ['tp', 't2m']
+    target_variables: ['tp']
+    relevant_years: [1940,2005]
+    relevant_months: [10, 11, 12, 1, 2, 3]
+    scaling_years: [1940,2005]
+    val_years: [2006,2015]
+    test_years: [2016, 2024]
+    land_sea_mask: '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc'
+    spatial_resolution: 1
+    predict_sea_land: false 
+    out_spatial_resolution: 1
+    sum_pr: True
+    coarse_t : false
+    coarse_s : false
+    coarse_s_target: false
+    coarse_t_target: false
+  scaler:
+    mode: 'standardize'
+  temporal_aggregator:
+    in_len: 6
+    out_len: 4
+    resolution_input: 7
+    resolution_output: 7
+    gap: 4
+    gap_lead_time: 0
+
+  data_dirs:
+      mediteranean:
+        tp: '/home/egauillard/data/PR_era5_MED_1degr_19400101_20240229_new.nc'
+        t2m: "/home/egauillard/data/T2M_era5_MED_1degr_19400101-20240229.nc"
+      north_hemisphere: 
+        msl:  "/home/egauillard/data/MSLP_era5_NHExt_1degr_19400101_20240229_new.nc"
+        sst: "/home/egauillard/data/SST_era5_NHExt_1degr_19400101-20240229_new.nc"
+        stream: "/home/egauillard/data/STREAM500_era5_NHExt_1degr_19400101_20240229_new.nc"
+      tropics:
+        ttr: "/home/egauillard/data/OLR_era5_tropics_1degr_19400101_20240229.nc"
