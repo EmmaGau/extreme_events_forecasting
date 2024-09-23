@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from omegaconf import OmegaConf
 import cartopy.crs as ccrs
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error, r2_score
 from  model.earthformer_model import CuboidERAModule
 from utils.temporal_aggregator import TemporalAggregatorFactory
 from utils.statistics import DataScaler
@@ -82,11 +82,6 @@ class Evaluation:
         self.model.eval()
         self.config = oc
 
-    def calculate_skill_score(self, predictions, ground_truth, climatology):
-        mse_model = mean_squared_error(ground_truth, predictions)
-        mse_climatology = mean_squared_error(ground_truth, climatology)
-        return 1 - (mse_model / mse_climatology)
-
     def run_inference(self):
         all_predictions = []
         all_ground_truth = []
@@ -132,7 +127,8 @@ class Evaluation:
         self.clim_test = np.concatenate(clim_test, axis=0)
 
         # Calculate climatology
-        self.climatology = self.test_dataset.compute_climatology()["mean"]
+        self.climatology_mean= self.test_dataset.compute_climatology()["mean"]
+        self.climatology_std = self.test_dataset.compute_climatology()["std"]
 
 
     def create_data_arrays(self):
@@ -144,6 +140,8 @@ class Evaluation:
         self.all_datasets_ground_truth = []
         self.all_datasets_climatology = []
         self.all_datasets_clim_test = []  # Nouvelle liste pour clim_test
+        self.all_datasets_climatology = []
+        self.all_datasets_climatology_std = []
 
         for sample in range(self.all_predictions.shape[0]):
             # Convertir les time_indexes en objets datetime pour cet échantillon
@@ -159,6 +157,7 @@ class Evaluation:
             data_vars_ground_truth = {}
             data_vars_climatology = {}
             data_vars_clim_test = {}  # Nouveau dictionnaire pour clim_test
+            data_vars_climatology_std = {}
 
             for i, var in enumerate(self.test_dataset.target_variables):
                 data_vars_predictions[var] = xr.DataArray(
@@ -177,21 +176,29 @@ class Evaluation:
                     dims=['time', 'latitude', 'longitude']
                 )
 
-                climatology_data = np.zeros_like(self.all_predictions[sample, :, :, :, i])
-                for t, time in enumerate(time_coords):
-                    climatology_data[t, :, :] = self.climatology[var].sel(dayofyear = time.dayofyear).values
-                
-                data_vars_climatology[var] = xr.DataArray(
-                    climatology_data,
-                    coords=coords,
-                    dims=['time', 'latitude', 'longitude']
-                )
+            climatology_data = np.zeros_like(self.all_predictions[sample, :, :, :, i])
+            climatology_std_data = np.zeros_like(self.all_predictions[sample, :, :, :, i])  # Ajoutez cette ligne
+            for t, time in enumerate(time_coords):
+                climatology_data[t, :, :] = self.climatology_mean[var].sel(dayofyear = time.dayofyear).values
+                climatology_std_data[t, :, :] = self.climatology_std[var].sel(dayofyear = time.dayofyear).values  # Ajoutez cette ligne
+            
+            data_vars_climatology[var] = xr.DataArray(
+                climatology_data,
+                coords=coords,
+                dims=['time', 'latitude', 'longitude']
+            )
+            data_vars_climatology_std[var] = xr.DataArray(  # Ajoutez ce bloc
+                climatology_std_data,
+                coords=coords,
+                dims=['time', 'latitude', 'longitude']
+            )
 
             # Créer les Datasets pour cet échantillon
             ds_predictions = xr.Dataset(data_vars_predictions, coords=coords)
             ds_ground_truth = xr.Dataset(data_vars_ground_truth, coords=coords)
             ds_climatology = xr.Dataset(data_vars_climatology, coords=coords)
             ds_clim_test = xr.Dataset(data_vars_clim_test, coords=coords)  # Nouveau Dataset pour clim_test
+            ds_climatology_std = xr.Dataset(data_vars_climatology_std, coords=coords)
 
             print("ds_predictions", ds_predictions)
             print("ds_ground_truth", ds_ground_truth)
@@ -207,14 +214,23 @@ class Evaluation:
             print("ds_climatology", ds_climatology)
             print("ds_clim_test", ds_clim_test)
 
+            # mutliplier par 1000 pour les précipitations
+            if "tp" in self.test_dataset.target_variables:
+                ds_predictions["tp"] *= 1000
+                ds_ground_truth["tp"] *= 1000
+                ds_climatology["tp"] *= 1000
+                ds_clim_test["tp"] *= 1000
+                ds_climatology_std["tp"] *= 1000
+
             self.all_datasets_predictions.append(ds_predictions)
             self.all_datasets_ground_truth.append(ds_ground_truth)
             self.all_datasets_climatology.append(ds_climatology)
             self.all_datasets_clim_test.append(ds_clim_test)  # Ajouter clim_test à la liste
+            self.all_datasets_climatology_std.append(ds_climatology_std) 
 
     def generate_plots(self):
         n_samples = len(self.all_datasets_predictions)
-        random_samples = random.sample(range(n_samples), min(30, n_samples))
+        random_samples = random.sample(range(n_samples), min(10, n_samples))
 
         for var_name in self.test_dataset.target_variables:
             for sample in random_samples:
@@ -235,6 +251,7 @@ class Evaluation:
                 lons = [-10] + list(pred_dataset[var_name].longitude.values) + [40]
 
                 cmap = 'Blues' if var_name == "tp" else 'Reds'
+
 
                 for lead_time, time in enumerate(time_steps):
                     pred = pred_dataset[var_name].sel(time=time)
@@ -296,6 +313,8 @@ class Evaluation:
         self.skill_score = {}
         self.std_model = {}
         self.std_climatology = {}
+        self.r2_model = {} 
+        self.r2_climatology = {}
 
         climatology_errors = {var: [] for var in self.test_dataset.target_variables}
         for sample_idx in range(len(self.all_datasets_ground_truth)):
@@ -337,6 +356,8 @@ class Evaluation:
             self.skill_score[var] = []
             self.std_model[var] = []
             self.std_climatology[var] = []
+            self.r2_model[var] = []
+            self.r2_climatology[var] = []
             
             for lead_time in range(len(self.all_datasets_ground_truth[0].time)):
                 print('lead time debugging')
@@ -354,7 +375,10 @@ class Evaluation:
                 # trouver la std du rmse 
                 std_rmse = np.std(np.sqrt((truth - pred)**2))
                 std_clim_rmse = np.std(np.sqrt((truth - clim)**2))
-                    
+
+                r2_model = r2_score(truth, pred)
+                r2_clim = r2_score(truth, clim)
+
 
                 range_squared = (np.max(truth) - np.min(truth))**2
                 relative_rmse = np.sqrt(mse_model / range_squared)
@@ -380,11 +404,9 @@ class Evaluation:
                 self.rmse_model[var].append(np.sqrt(mse_model))
                 self.rmse_climatology[var].append(np.sqrt(mse_clim))
                 self.skill_score[var].append(1- (mse_model / mse_clim))
-        
-        
-            if var == "tp":
-                self.rmse_model[var] = [x * 1000 for x in self.rmse_model["tp"]]
-                self.rmse_climatology[var] = [x * 1000 for x in self.rmse_climatology["tp"]]
+                self.r2_model[var].append(r2_model)
+                self.r2_climatology[var].append(r2_clim)
+
         # transformer tous les rmse par grid cell 
         self.rmse_climatology = {key: [v / self.out_spatial_resolution for v in value] for key, value in self.rmse_climatology.items()}
         self.rmse_model = {key: [v / self.out_spatial_resolution for v in value] for key, value in self.rmse_model.items()}
@@ -394,21 +416,9 @@ class Evaluation:
     def plot_mse_curves(self):
         for var in self.test_dataset.target_variables:
             lead_times = [i*self.test_dataset.resolution_output for i in range(len(self.all_datasets_ground_truth[0].time))]
-            x_labels = [f"{t}-{t+self.test_dataset.resolution_output}" for t in lead_times]
-
-            # Plot Relative MSE
-            plt.figure(figsize=(12, 7))
-            plt.plot(lead_times, self.relative_mse_model[var], 'o-', label='Model', markersize=6)
-            plt.plot(lead_times, self.relative_mse_climatology[var], 's-', label='Climatology', markersize=6)
-            plt.title(f'Relative MSE vs Lead Time - {var}', fontsize=16)
-            plt.xlabel('Lead Time', fontsize=14)
-            plt.ylabel('Relative MSE', fontsize=14)
-            plt.xticks(lead_times, x_labels, rotation=45, ha='right')
-            plt.grid(True, which='both', linestyle='--', alpha=0.7)
-            plt.legend(fontsize=12, loc='upper left')
-            plt.tight_layout()
-            plt.savefig(os.path.join(self.save_folder, f'{var}_relative_mse_comparison.png'), dpi=300, bbox_inches='tight')
-            plt.close()
+            lead_time_gap = self.test_dataset.aggregator.lead_time_gap
+            print(lead_time_gap)
+            x_labels = [f"{t + lead_time_gap}-{t+self.test_dataset.resolution_output+ lead_time_gap}" for t in lead_times]
 
             # Plot MSE
             plt.figure(figsize=(12, 7))
@@ -439,13 +449,27 @@ class Evaluation:
             plt.savefig(os.path.join(self.save_folder, f'{var}_rmse_comparison.png'), dpi=300, bbox_inches='tight')
             plt.close()
 
+            # Plot R2
+            print("r2_model", self.r2_model)
+            print("r2_climatology", self.r2_climatology)
+            plt.figure(figsize=(12, 7))
+            plt.plot(lead_times, self.r2_model[var], 'o-', label='Model', markersize=6)
+            plt.plot(lead_times, self.r2_climatology[var], 's-', label='Climatology', markersize=6)
+            plt.title(f'R2 Score vs Lead Time - {var}', fontsize=16)
+            plt.xlabel('Lead Time', fontsize=14)
+            plt.ylabel('R2 Score', fontsize=14)
+            plt.xticks(lead_times, x_labels, rotation=45, ha='right')
+            plt.grid(True, which='both', linestyle='--', alpha=0.7)
+            plt.legend(fontsize=12, loc='upper right')
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.save_folder, f'{var}_r2_comparison.png'), dpi=300, bbox_inches='tight')
+            plt.close()
+
 
     def calculate_spatial_mse(self):
         self.spatial_mse_model = {}
-        self.spatial_relative_mse_model = {}
         self.spatial_rmse_model = {}
         self.spatial_mse_climatology = {}
-        self.spatial_relative_mse_climatology = {}
         self.spatial_rmse_climatology = {}
         
         for var in self.test_dataset.target_variables:
@@ -468,15 +492,8 @@ class Evaluation:
             self.spatial_mse_model[var] = mse_model
             self.spatial_mse_climatology[var] = mse_climatology
             range_squared = (truth_max - truth_min)**2
-            self.spatial_relative_mse_model[var] = mse_model / range_squared
-            self.spatial_relative_mse_climatology[var] = mse_climatology / range_squared
             self.spatial_rmse_model[var] = np.sqrt(mse_model) 
             self.spatial_rmse_climatology[var] = np.sqrt(mse_climatology)
-            if var == "tp":
-                self.spatial_rmse_model[var] *= 1000
-                self.spatial_rmse_climatology[var] *= 1000
-        
-
 
     def plot_spatial_mse(self):
         for var in self.test_dataset.target_variables:
@@ -489,12 +506,6 @@ class Evaluation:
                 lim_max = max(data)
                 return 0, lim_max
 
-            # Calculer les valeurs min et max symétriques pour chaque type de plot
-            vmin_relative, vmax_relative = pos_limits(np.concatenate([
-                self.spatial_relative_mse_model[var].flatten(),
-                self.spatial_relative_mse_climatology[var].flatten()
-            ]))
-            
             vmin_rmse, vmax_rmse = pos_limits(np.concatenate([
                 self.spatial_rmse_model[var].flatten(),
                 self.spatial_rmse_climatology[var].flatten()
@@ -528,11 +539,9 @@ class Evaluation:
                 plt.close()
 
             # Plot Relative MSE
-            create_plot(self.spatial_relative_mse_model[var], f'Relative MSE Model - {var}', f'{var}_spatial_relative_mse_model.png', vmin_relative, vmax_relative, 'Relative MSE', 'RdBu_r')
-            create_plot(self.spatial_relative_mse_climatology[var], f'Relative MSE Climatology - {var}', f'{var}_spatial_relative_mse_climatology.png', vmin_relative, vmax_relative, 'Relative MSE', 'RdBu_r')
-            create_plot(self.spatial_rmse_model[var], f'RMSE Model - {var}', f'{var}_spatial_rmse_model.png', vmin_rmse, vmax_rmse, f'RMSE in {self.unity[var]}', 'RdBu_r')
-            create_plot(self.spatial_rmse_climatology[var], f'RMSE Climatology - {var}', f'{var}_spatial_rmse_climatology.png', vmin_rmse, vmax_rmse, f'RMSE in {self.unity[var]}', 'RdBu_r')
-            create_plot(self.spatial_rmse_model[var] - self.spatial_rmse_climatology[var], f'Difference RMSE Model - Climatology - {var}', f'{var}_spatial_rmse_diff.png', -3, 3, f'RMSE in {self.unity[var]}', 'bwr')
+            create_plot(self.spatial_rmse_model[var], f'RMSE Model - {var}', f'{var}_spatial_rmse_model.png', vmin_rmse, vmax_rmse, f'RMSE in {self.unity[var]}', 'YlOrRd')
+            create_plot(self.spatial_rmse_climatology[var], f'RMSE Climatology - {var}', f'{var}_spatial_rmse_climatology.png', vmin_rmse, vmax_rmse, f'RMSE in {self.unity[var]}', 'YlOrRd')
+            create_plot(self.spatial_rmse_model[var] - self.spatial_rmse_climatology[var], f'Difference RMSE Model - Climatology - {var}', f'{var}_spatial_rmse_diff.png', -3, 3, f'RMSE in {self.unity[var]}', 'RdYlBu')
 
 
     def save_mse_to_csv(self):
@@ -547,16 +556,9 @@ class Evaluation:
             df[f'{var}_skill_score'] = self.skill_score[var]
             df[f'{var}_std_rmse_model'] = self.std_model[var]
             df[f'{var}_std_rmse_climatology'] = self.std_climatology[var]
-        # rajouter les moyennes de chaqque colonne 
-
         means = df.mean()
-    
-        # Ajouter une ligne de séparation (optionnel)
         df.loc['---'] = '---'
-
-        # Ajouter la ligne des moyennes
         df.loc['mean'] = means
-
 
         df.to_csv(os.path.join(self.save_folder, 'mse_results.csv'), index=False)
         
@@ -566,26 +568,32 @@ class Evaluation:
         all_preds = []
         all_truths = []
         all_clims = []
+        all_clim_stds = []
         # Parcourir tous les échantillons
-        for i, (pred, truth, clim) in enumerate(zip(self.all_datasets_predictions, self.all_datasets_ground_truth, self.all_datasets_climatology)):
+        for i, (pred, truth, clim, clim_std) in enumerate(zip(self.all_datasets_predictions, self.all_datasets_ground_truth, self.all_datasets_climatology, self.all_datasets_climatology_std)):
             # Ajouter une dimension 'sample' à chaque dataset
             pred = pred.expand_dims(sample=[i])
             truth = truth.expand_dims(sample=[i])
             clim = clim.expand_dims(sample=[i])
+            clim_std = clim_std.expand_dims(sample=[i])
             
             all_preds.append(pred)
             all_truths.append(truth)
             all_clims.append(clim)
+            all_clim_stds.append(clim_std)
 
         # Combiner tous les datasets de vérité terrain
         combined_truths = xr.concat(all_truths, dim='sample')
         combined_preds = xr.concat(all_preds, dim='sample')
         combined_clims = xr.concat(all_clims, dim='sample')
+        combined_clim_stds = xr.concat(all_clim_stds, dim='sample')
 
         # Sauvegarder les datasets combinés
         combined_preds.to_netcdf(os.path.join(self.save_folder, 'all_predictions.nc'))
         combined_truths.to_netcdf(os.path.join(self.save_folder, 'all_ground_truths.nc'))
         combined_clims.to_netcdf(os.path.join(self.save_folder, 'all_climatology.nc'))
+        combined_clim_stds.to_netcdf(os.path.join(self.save_folder, 'all_climatology_std.nc'))  # Ajoutez cette ligne
+        
         self.target_class.data.to_netcdf(os.path.join(self.save_folder, 'target.nc'))
 
         # Calculer et sauvegarder les MSE
@@ -635,7 +643,14 @@ if __name__ == "__main__":
     # save the whole dataset to get a climatology for the percentiles
     all_config = dataset_cfg.copy()
     all_config['dataset']['relevant_years'] = [1940, 2024]
-    all_dataset =  DatasetEra(all_config, data_dirs, temp_aggregator_factory, scaler).target_class.data.to_netcdf(os.path.join(exp_dir, '1940_2024_target.nc'))
+
+    data_class =  DatasetEra(all_config, data_dirs, temp_aggregator_factory, scaler)
+    target_class = data_class.reverse_scaling(data_class.target_class).to_netcdf(os.path.join(exp_dir, '1940_2024_target.nc'))
+
+
+    # unscale the data
+    
+
 
     eval = Evaluation(checkpoint_path, config_path, test_dataset, scaler)
     print("ready to eval")
