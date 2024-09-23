@@ -23,12 +23,22 @@ import pandas as pd
 import os
 import scipy.stats as stats
 
+#(TODO) génerer histogram rank + RPSS et BSS avec la climatology gaussienne + changer les couleurs des maps + bss centré en 0 + refactor le code et utilise transform data + les map de time series
+import numpy as np
+import xarray as xr
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from scipy import stats
+
 class EnsembleVisualization:
-    def __init__(self, prediction_files, climatology_file, ground_truth_file, save_folder):
+    def __init__(self, prediction_files, climatology_mean_file, climatology_std_file, ground_truth_file, save_folder):
         self.prediction_files = prediction_files
-        self.climatology_file = climatology_file
+        self.climatology_mean_file = climatology_mean_file
+        self.climatology_std_file = climatology_std_file
         self.ground_truth_file = ground_truth_file
         self.save_folder = save_folder
+        self.data = self.prepare_data()
         
     def transform_data(self, da):
         mask = ~np.isnan(da).any(dim=['latitude', 'longitude'])
@@ -47,23 +57,30 @@ class EnsembleVisualization:
         new_da = da.isel(time=valid_time_indices)
         return new_da
     
-    def prepare_data(self):
+    def prepare_data(self)->dict:
+        """Prepare the data for visualization.
+
+        Returns:
+            dict: A dictionary containing various data arrays and statistics.
+        """
         pred_ds = [self.transform_data(xr.open_dataset(f)['tp']) for f in self.prediction_files]
-        climatology_ds = self.transform_data(xr.open_dataset(self.climatology_file)['tp'])
+        climatology_mean = self.transform_data(xr.open_dataset(self.climatology_mean_file)['tp'])
+        climatology_std = self.transform_data(xr.open_dataset(self.climatology_std_file)['tp'])
         gt_ds = self.transform_data(xr.open_dataset(self.ground_truth_file)['tp'])
         
         ensemble_mean = sum(pred_ds) / len(pred_ds)
         ensemble_std = xr.concat(pred_ds, dim='ensemble').std(dim='ensemble')
         
         ensemble_error = ensemble_mean - gt_ds
-        climatology_error = climatology_ds - gt_ds
+        climatology_error = climatology_mean - gt_ds
         
-        ensemble_rmse = np.sqrt((ensemble_error**2).mean(dim='time'))
-        climatology_rmse = np.sqrt((climatology_error**2).mean(dim='time'))
+        ensemble_rmse = np.sqrt((ensemble_error**2))
+        climatology_rmse = np.sqrt((climatology_error**2))
         
         return {
             'pred_ds': pred_ds,
-            'climatology_ds': climatology_ds,
+            'climatology_mean': climatology_mean,
+            'climatology_std': climatology_std,
             'gt_ds': gt_ds,
             'ensemble_mean': ensemble_mean,
             'ensemble_std': ensemble_std,
@@ -72,9 +89,8 @@ class EnsembleVisualization:
         }
     
     def plot_rank_histogram(self, var):
-        data = self.prepare_data()
-        ranks = sum([pred < data['gt_ds'] for pred in data['pred_ds']])
-        rank_hist, _ = np.histogram(ranks.values.flatten(), bins=len(data['pred_ds'])+1, range=(-0.5, len(data['pred_ds'])+0.5))
+        ranks = sum([pred < self.data['gt_ds'] for pred in self.data['pred_ds']])
+        rank_hist, _ = np.histogram(ranks.values.flatten(), bins=len(self.data['pred_ds'])+1, range=(-0.5, len(self.data['pred_ds'])+0.5))
         
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.bar(range(len(rank_hist)), rank_hist, color='purple', alpha=0.7)
@@ -89,13 +105,68 @@ class EnsembleVisualization:
         plt.tight_layout()
         plt.savefig(f'{self.save_folder}/{var}_rank_histogram.png', bbox_inches='tight', dpi=300)
         plt.close()
-    
+
+    def plot_time_series(self, var, lat_idx=0, lon_idx=4):
+        # Extract data for the selected grid cell
+        gt_values = self.data["gt_ds"].isel(latitude=lat_idx, longitude=lon_idx).values.flatten()
+        climatology_values = self.data["climatology_mean"].isel(latitude=lat_idx, longitude=lon_idx).values.flatten()
+        ensemble_values = [ds.isel(latitude=lat_idx, longitude=lon_idx).values.flatten() for ds in self.data['pred_ds']]
+
+        # Plot for every ensemble on different figures
+        fig, axs = plt.subplots(len(ensemble_values), 1, figsize=(10, 4*len(ensemble_values)))
+        for i, ensemble in enumerate(ensemble_values):
+            axs[i].plot(np.arange(ensemble.size), ensemble, alpha=0.5, label=f"Ensemble {i+1}")
+            axs[i].plot(climatology_values, color='black', label='Climatology')
+            axs[i].plot(gt_values, color='red', label='Ground Truth')
+            axs[i].legend()
+            axs[i].set_title(f'Ensemble {i+1}')
+            axs[i].set_xlabel('Time')
+            axs[i].set_ylabel(var)
+        
+        plt.tight_layout()
+        plt.savefig(f'{self.save_folder}/{var}_time_series.png', bbox_inches='tight', dpi=300)
+        plt.close()
+
+    def plot_time_series_spread(self, var, lat_idx=0, lon_idx=0):
+        # Extract data for the selected grid cell
+        gt_values = self.data["gt_ds"].isel(latitude=lat_idx, longitude=lon_idx)
+        climatology_mean = self.data["climatology_mean"].isel(latitude=lat_idx, longitude=lon_idx).values.flatten()
+        climatology_std = self.data["climatology_std"].isel(latitude=lat_idx, longitude=lon_idx).values.flatten()
+        ensemble_mean = self.data["ensemble_mean"].isel(latitude=lat_idx, longitude=lon_idx).values.flatten()
+        ensemble_std = self.data["ensemble_std"].isel(latitude=lat_idx, longitude=lon_idx).values.flatten()
+
+        time = gt_values.time.values.flatten()
+        gt_values = gt_values.values.flatten()
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+
+        # Plot climatology
+        ax.fill_between(time, climatology_mean - climatology_std, climatology_mean + climatology_std, 
+                        alpha=0.3, color='blue', label='Climatology Range')
+        ax.plot(time,climatology_mean, color='blue', label='Climatology Mean')
+
+        # Plot ensemble
+        ax.fill_between(time,ensemble_mean - ensemble_std, ensemble_mean + ensemble_std, 
+                        alpha=0.3, color='green', label='Ensemble Range')
+        ax.plot(time,ensemble_mean, color='green', label='Ensemble Mean')
+
+        # Plot ground truth
+        ax.plot(time,gt_values, color='red', label='Ground Truth')
+
+        ax.set_xlabel('Time')
+        ax.set_ylabel(var)
+        ax.set_title(f'Time Series Spread - {var} (Lat: {lat_idx}, Lon: {lon_idx})')
+        ax.legend()
+
+        plt.tight_layout()
+        plt.savefig(f'{self.save_folder}/{var}_time_series_spread.png', bbox_inches='tight', dpi=300)
+        plt.close()
+
     def plot_ensemble_sharpness(self, var):
-        data = self.prepare_data()
-        ensemble_mean = data['ensemble_mean'].mean(dim=['latitude', 'longitude'])
-        ensemble_std = data['ensemble_std'].mean(dim=['latitude', 'longitude'])
-        climatology_mean = data['climatology_ds'].mean(dim=['latitude', 'longitude'])
-        climatology_std = data['climatology_ds'].std(dim='time').mean(dim=['latitude', 'longitude'])
+        ensemble_mean = self.data['ensemble_mean'].mean(dim=['latitude', 'longitude'])
+        ensemble_std = self.data['ensemble_std'].mean(dim=['latitude', 'longitude'])
+        climatology_mean = self.data['climatology_mean'].mean(dim=['latitude', 'longitude'])
+        climatology_std = self.data['climatology_std'].mean(dim=['latitude', 'longitude'])
         
         fig, ax = plt.subplots(figsize=(10, 6))
         x = np.linspace(ensemble_mean.min().values - 4*ensemble_std.max().values,
@@ -117,9 +188,8 @@ class EnsembleVisualization:
         plt.close()
     
     def plot_ensemble_vs_climatology_rmse(self, var):
-        data = self.prepare_data()
-        ensemble_rmse = data['ensemble_rmse'].mean(dim=['latitude', 'longitude'])
-        climatology_rmse = data['climatology_rmse'].mean(dim=['latitude', 'longitude'])
+        ensemble_rmse = self.data['ensemble_rmse'].mean(dim=['latitude', 'longitude'])
+        climatology_rmse = self.data['climatology_rmse'].mean(dim=['latitude', 'longitude'])
         
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.scatter(ensemble_rmse, climatology_rmse)
@@ -137,9 +207,8 @@ class EnsembleVisualization:
         plt.close()
     
     def plot_spatial_rmse_maps(self, var):
-        data = self.prepare_data()
-        ensemble_rmse = data['ensemble_rmse']
-        climatology_rmse = data['climatology_rmse']
+        ensemble_rmse = self.data['ensemble_rmse']
+        climatology_rmse = self.data['climatology_rmse']
         
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8), subplot_kw={'projection': ccrs.PlateCarree()})
         
@@ -168,16 +237,18 @@ class EnsembleVisualization:
     
     def create_all_plots(self, var):
         self.plot_rank_histogram(var)
+        self.plot_time_series(var)
+        self.plot_time_series_spread(var)
         self.plot_ensemble_sharpness(var)
         self.plot_ensemble_vs_climatology_rmse(var)
         self.plot_spatial_rmse_maps(var)
-
-
+        
 class ModelEvaluation:
-    def __init__(self, prediction_files, ground_truth_file, climatology_file, save_dir, entire_era_file):
-        self.prediction_datasets = [xr.open_dataset(file) for file in prediction_files]
-        self.ground_truth_dataset = xr.open_dataset(ground_truth_file)
-        self.climatology_dataset = xr.open_dataset(climatology_file)
+    def __init__(self, prediction_files, ground_truth_file, climatology_file, climatology_std_file, save_dir, entire_era_file):
+        self.prediction_datasets = [self.transform_data(xr.open_dataset(file)) for file in prediction_files]
+        self.ground_truth_dataset = self.transform_data(xr.open_dataset(ground_truth_file))
+        self.climatology_dataset = self.transform_data(xr.open_dataset(climatology_file))
+        self.climatology_std_dataset = self.transform_data(xr.open_dataset(climatology_std_file))
         self.era_entire_dataset = xr.open_dataset(entire_era_file)
         self.save_dir = save_dir
         os.makedirs(save_dir, exist_ok=True)
@@ -186,30 +257,36 @@ class ModelEvaluation:
         
         self.target_variables = list(self.ground_truth_dataset.data_vars)
         self.extreme_thresholds = self._calculate_extreme_thresholds()
+        self.drought_thresholds = self._calculate_drought_thresholds()
         self.nb_ensemble = len(self.prediction_datasets)
 
-    def _calculate_extreme_thresholds(self):
-        thresholds = {}
-        for var in self.target_variables:
-            threshold = self.era_entire_dataset[var].quantile(0.66, dim='time')
-            thresholds[var] = threshold
-        return thresholds
-
-    def _calculte_droughts_thresholds(self):
-        thresholds = {}
-        for var in self.target_variables:
-            threshold = self.era_entire_dataset[var].quantile(0.33, dim='time')
-            thresholds[var] = threshold
-        return thresholds
-    
+    def transform_data(self, da):
+        mask = ~np.isnan(da).any(dim=['latitude', 'longitude'])
         
-    def _replace_time_lt(self, da):
-        lead_time = np.arange(1, len(da.time) + 1)
+        def get_valid_times(sample_mask):
+            return np.where(sample_mask)[0]
+        
+        valid_time_indices = xr.apply_ufunc(
+            get_valid_times,
+            mask,
+            input_core_dims=[['time']],
+            output_core_dims=[['valid_time']],
+            vectorize=True
+        )
+        
+        new_da = da.isel(time=valid_time_indices)
+        return new_da
 
-        # Remplacer la coordonnée time par lead_time
-        da_new = da.assign_coords(lead_time=('time', lead_time)).swap_dims({'time': 'lead_time'})
-        da_new = da_new.drop_vars('time')
-        return da_new
+    def _calculate_extreme_thresholds(self):
+        return {var: self.era_entire_dataset[var].quantile(0.66, dim='time') for var in self.target_variables}
+
+    def _calculate_drought_thresholds(self):
+        return {var: self.era_entire_dataset[var].quantile(0.33, dim='time') for var in self.target_variables}
+
+    def _replace_time_lt(self, da):
+        lead_time = np.arange(1, len(da.valid_time) + 1)
+        da_new = da.assign_coords(lead_time=('valid_time', lead_time)).swap_dims({'valid_time': 'lead_time'})
+        return da_new.drop_vars('valid_time')
     
     def calculate_skill_scores(self,ensemble_score, climatology_score, valid_samples):
         """
@@ -382,127 +459,67 @@ class ModelEvaluation:
         else:
             return xr.DataArray(np.nan, dims=['quantile', 'lat', 'lon'], coords={'quantile': [0.3333, 0.6667]})
         
-    def plot_rpss_maps(self, var , rpss, bss, bss_drought):
-        # plot rpss 
-        rpss_mean = rpss.mean(dim='lead_time')
-        
-        lats = [30] + list(rpss_mean.latitude.values) + [45]
-        lons = [-10] + list(rpss_mean.longitude.values) + [40]
-
-        # Créer la carte
-        fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
-        
-        # Utiliser pcolormesh au lieu de imshow pour une meilleure représentation des données discrètes
-        vmin = min(rpss_mean.min().values, -0.2)
-        vmax = max(rpss_mean.max().values, 0.2)
-        im = ax.imshow(rpss_mean, cmap="bwr", transform=ccrs.PlateCarree(),
-                           extent=[lons[0], lons[-1], lats[0], lats[-1]], vmin=vmin, vmax=vmax)
-        
-        # Ajouter les caractéristiques de la carte
-        ax.coastlines(resolution='50m', color='black', linewidth=0.5)
-        ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
-        ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
-        ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
-        
-        # Configurer la grille
-        gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                        linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
-        lat_margin = 0.5  # ajustez selon vos besoins
-        ax.set_extent([rpss_mean.longitude.min(), rpss_mean.longitude.max(),
-                    rpss_mean.latitude.min() - lat_margin, rpss_mean.latitude.max() + lat_margin], 
-                    crs=ccrs.PlateCarree())
-        gl.xlocator = mticker.FixedLocator(np.arange(lons[0], lons[-1], 10))
-        gl.ylocator = mticker.FixedLocator(np.arange(lats[0], lats[-1], 5))
-        gl.top_labels = False
-        gl.right_labels = False
-        
-        # Ajouter la barre de couleur
-        cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
-        cbar.set_label(f'RPSS - {var}', fontsize=12)
-        
-        # Configurer le titre et les limites de la carte
-        plt.title(f'Mean RPSS - {var} - {self.nb_ensemble} ensemble ', fontsize=16)
-        ax.set_extent([lons[0], lons[-1], lats[0], lats[-1]], crs=ccrs.PlateCarree())
-        
-        # Sauvegarder la figure
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.save_folder, f'{var}_rpss_map.png'), 
-                    bbox_inches='tight', dpi=300)
-        plt.close()
-
-        bss_mean = bss.mean(dim='lead_time')
-        lats = [30] + list(bss_mean.latitude.values) + [45]
-        lons = [-10] + list(bss_mean.longitude.values) + [40]
-
-        # Créer la carte
-        fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
-        
-        # Utiliser pcolormesh au lieu de imshow pour une meilleure représentation des données discrètes
-        vmin = min(bss_mean.min().values, -0.15)
-        vmax = max(bss_mean.max().values, 0.15)
-        im = ax.imshow(bss_mean, cmap='bwr', transform=ccrs.PlateCarree(),
-                           extent=[lons[0], lons[-1], lats[0], lats[-1]], vmin=vmin, vmax=vmax)
-        
-        # Ajouter les caractéristiques de la carte
-        ax.coastlines(resolution='50m', color='black', linewidth=0.5)
-        ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
-        ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
-        ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
-        
-        # Configurer la grille
-        gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                        linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
-        gl.xlocator = mticker.FixedLocator(np.arange(lons[0], lons[-1], 10))
-        gl.ylocator = mticker.FixedLocator(np.arange(lats[0], lats[-1], 5))
-        gl.top_labels = False
-        gl.right_labels = False
-        
-        # Ajouter la barre de couleur
-        cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
-        cbar.set_label(f'bss - {var}', fontsize=12)
-        
-        # Configurer le titre et les limites de la carte
-        plt.title(f'Mean BSS (upper tercile) - {var}- {self.nb_ensemble} ensemble', fontsize=16)
-        ax.set_extent([lons[0], lons[-1], lats[0], lats[-1]], crs=ccrs.PlateCarree())
-        
-        # Sauvegarder la figure
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.save_folder, f'{var}_bss_map.png'), 
-                    bbox_inches='tight', dpi=300)
-        plt.close()
-
-        bss_drought_mean = bss_drought.mean(dim='lead_time')
-    
-        fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
-        
-        vmin = min(bss_drought_mean.min().values, -0.15)
-        vmax = max(bss_drought_mean.max().values, 0.15)
-        im = ax.imshow(bss_drought_mean, cmap='bwr', transform=ccrs.PlateCarree(),
-                    extent=[lons[0], lons[-1], lats[0], lats[-1]], vmin=vmin, vmax=vmax)
-
-        # Ajouter les caractéristiques de la carte
-        ax.coastlines(resolution='50m', color='black', linewidth=0.5)
-        ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
-        ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
-        ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
-        
-        # Configurer la grille
-        gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                        linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
-        gl.xlocator = mticker.FixedLocator(np.arange(lons[0], lons[-1], 10))
-        gl.ylocator = mticker.FixedLocator(np.arange(lats[0], lats[-1], 5))
-        gl.top_labels = False
-        gl.right_labels = False
-        
-        cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
-        cbar.set_label(f'BSS (Drought) - {var}', fontsize=12)
-        
-        plt.title(f'Mean BSS (Drought) - {var} - {self.nb_ensemble} ensemble', fontsize=16)
-        
-        plt.savefig(os.path.join(self.save_folder, f'{var}_bss_drought_map.png'), 
-                    bbox_inches='tight', dpi=300)
-        plt.close()
+    def plot_rpss_maps(self, var, rpss, bss_upper, bss_drought):
+        def create_centered_map(data, title, filename, cbar_label):
+            data_mean = data.mean(dim='lead_time')
             
+            lats = [30] + list(data_mean.latitude.values) + [45]
+            lons = [-10] + list(data_mean.longitude.values) + [40]
+
+            fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
+            
+            # Centrer l'échelle de couleur autour de 0
+            vmax = max(abs(data_mean.min().values), abs(data_mean.max().values), 0.2)
+            vmin = -vmax
+            
+            im = ax.imshow(data_mean, cmap="coolwarm", transform=ccrs.PlateCarree(),
+                        extent=[lons[0], lons[-1], lats[0], lats[-1]], vmin=vmin, vmax=vmax)
+            
+            ax.coastlines(resolution='50m', color='black', linewidth=0.5)
+            ax.add_feature(cfeature.BORDERS, linestyle=':', color='black', linewidth=0.5)
+            ax.add_feature(cfeature.LAND, edgecolor='black', facecolor='lightgrey', alpha=0.3)
+            ax.add_feature(cfeature.OCEAN, edgecolor='black', facecolor='lightblue', alpha=0.3)
+            
+            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                            linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+            lat_margin = 0.5
+            ax.set_extent([data_mean.longitude.min(), data_mean.longitude.max(),
+                        data_mean.latitude.min() - lat_margin, data_mean.latitude.max() + lat_margin], 
+                        crs=ccrs.PlateCarree())
+            gl.xlocator = mticker.FixedLocator(np.arange(lons[0], lons[-1], 10))
+            gl.ylocator = mticker.FixedLocator(np.arange(lats[0], lats[-1], 5))
+            gl.top_labels = False
+            gl.right_labels = False
+            
+            cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.08)
+            cbar.set_label(cbar_label, fontsize=12)
+            
+            plt.title(title, fontsize=16)
+            ax.set_extent([lons[0], lons[-1], lats[0], lats[-1]], crs=ccrs.PlateCarree())
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.save_folder, filename), 
+                        bbox_inches='tight', dpi=300)
+            plt.close()
+
+        # RPSS map
+        create_centered_map(rpss, 
+                            f'Mean RPSS - {var} - {self.nb_ensemble} ensemble',
+                            f'{var}_rpss_map.png',
+                            f'RPSS - {var}')
+
+        # BSS (upper tercile) map
+        create_centered_map(bss, 
+                            f'Mean BSS (upper tercile) - {var} - {self.nb_ensemble} ensemble',
+                            f'{var}_bss_map.png',
+                            f'BSS - {var}')
+
+        # BSS (Drought) map
+        create_centered_map(bss_drought, 
+                            f'Mean BSS (Drought) - {var} - {self.nb_ensemble} ensemble',
+                            f'{var}_bss_drought_map.png',
+                            f'BSS (Drought) - {var}')
+                
 
     def save_scores(self, var, rpss, bss, rps_ensemble, rps_climatology, bs_ensemble, bs_climatology):
         rpss.name = f'{var}_rpss'
