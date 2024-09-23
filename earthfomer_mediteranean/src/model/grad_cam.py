@@ -14,6 +14,7 @@ from data.dataset import DatasetEra
 VAL_YEARS = [2006,2015]
 TEST_YEARS = [2016, 2024]
 
+
 class GradCAMLightning:
     def __init__(self, pl_module, target_layers):
         self.pl_module = pl_module
@@ -44,41 +45,29 @@ class GradCAMLightning:
         cams = {}
 
         for layer in self.target_layers:
-            activations = self.activations[layer][0]  # Prendre le premier élément du batch
-            gradients = self.gradients[layer]  # Prendre le premier élément du batch
+            activations = self.activations[layer][0] # (B,T,H,W,C)
+            gradients = self.gradients[layer]
+            print(f"Layer: {layer.__class__.__name__}")
+            print(f"Gradient shape: {gradients.shape}")
+
 
             print(f"Layer: {layer.__class__.__name__}")
             print(f"Gradient shape: {gradients.shape}")
             print(f"Activation shape: {activations.shape}")
 
-            # Spatial CAM (H, W)
-            spatial_weights = torch.mean(gradients, dim=[0,1, -1])  # Moyenne sur T et C
-            spatial_cam = torch.sum(activations * spatial_weights.unsqueeze(0).unsqueeze(-1), dim=[0, 1, -1])
-            spatial_cam = F.relu(spatial_cam)
-            spatial_cam /= spatial_cam.max()
+            # Calculer l'importance globale
+            weights = torch.mean(gradients, dim=(1, 2, 3))
+            cam = torch.sum(weights.unsqueeze(1).unsqueeze(2).unsqueeze(3) * activations, dim=0)
+            cam = F.relu(cam)
+            cam = cam / cam.max()
 
-            # Temporal CAM (T)
-            temporal_weights = torch.mean(gradients, dim=[0,2,3, -1])  # Moyenne sur H, W et C
-            temporal_cam = torch.sum(activations * temporal_weights.unsqueeze(1).unsqueeze(2).unsqueeze(-1), dim=[0, 2, 3, -1])
-            temporal_cam = F.relu(temporal_cam)
-            temporal_cam /= temporal_cam.max()
+            # Interpoler la cam pour correspondre aux dimensions de l'entrée
+            cam_resized = F.interpolate(cam.unsqueeze(0).unsqueeze(0), 
+                                        size=(input.shape[1], input.shape[2], input.shape[3]),
+                                        mode='trilinear',
+                                        align_corners=False).squeeze()
 
-            # Channel CAM (C)
-            channel_weights = torch.mean(gradients, dim=[0, 1, 2,3])  # Moyenne sur T, H et W
-            channel_cam = torch.sum(activations * channel_weights.unsqueeze(0).unsqueeze(1).unsqueeze(2), dim=[0, 1, 2, 3])
-            channel_cam = F.relu(channel_cam)
-            channel_cam /= channel_cam.max()
-
-            cams[layer] = {
-                'spatial': spatial_cam,
-                'temporal': temporal_cam,
-                'channel': channel_cam
-            }
-
-            print(f"Spatial CAM shape: {spatial_cam.shape}")
-            print(f"Temporal CAM shape: {temporal_cam.shape}")
-            print(f"Channel CAM shape: {channel_cam.shape}")
-            print("------------------------")
+            cams[layer] = cam_resized
 
         return cams, pred_seq, input, target
 
@@ -89,34 +78,33 @@ def visualize_cams(cams, input, pred_seq, save_path):
     if num_layers == 1:
         axes = axes.reshape(1, -1)
     
-    for idx, (layer, cam_dict) in enumerate(cams.items()):
-        # Spatial CAM
-        spatial_cam = cam_dict['spatial'].detach().cpu().numpy()
-        im = axes[idx, 0].imshow(spatial_cam, cmap='hot')
-        axes[idx, 0].set_title(f"Layer {idx+1} Spatial CAM")
-        plt.colorbar(im, ax=axes[idx, 0])
+    for idx, (layer, cam) in enumerate(cams.items()):
+        # Importance temporelle
+        temporal_importance = torch.mean(cam, dim=(1, 2))
+        axes[idx, 0].plot(temporal_importance.detach().cpu().numpy())
+        axes[idx, 0].set_title(f"Layer {idx+1} Temporal Importance")
+        axes[idx, 0].set_xlabel("Time steps")
+        axes[idx, 0].set_ylabel("Importance")
         
-        # Temporal CAM
-        temporal_cam = cam_dict['temporal'].detach().cpu().numpy()
-        axes[idx, 1].plot(temporal_cam)
-        axes[idx, 1].set_title(f"Layer {idx+1} Temporal CAM")
-        axes[idx, 1].set_xlabel("Time steps")
-        axes[idx, 1].set_ylabel("Importance")
+        # Importance spatiale (moyenne sur le temps et les canaux)
+        spatial_importance = torch.mean(cam, dim=(0, 3))
+        im = axes[idx, 1].imshow(spatial_importance.detach().cpu().numpy(), cmap='hot')
+        axes[idx, 1].set_title(f"Layer {idx+1} Spatial Importance")
+        plt.colorbar(im, ax=axes[idx, 1])
         
-        # Channel CAM
-        channel_cam = cam_dict['channel'].detach().cpu().numpy()
-        axes[idx, 2].bar(range(len(channel_cam)), channel_cam)
-        axes[idx, 2].set_title(f"Layer {idx+1} Channel CAM")
+        # Importance des canaux
+        channel_importance = torch.mean(cam, dim=(0, 1, 2))
+        axes[idx, 2].bar(range(len(channel_importance)), channel_importance.detach().cpu().numpy())
+        axes[idx, 2].set_title(f"Layer {idx+1} Channel Importance")
         axes[idx, 2].set_xlabel("Channels")
         axes[idx, 2].set_ylabel("Importance")
         
+        # Visualiser l'entrée ou la prédiction
         if idx == 0:
-            # Sélectionner le premier pas de temps et le premier canal
             input_slice = input[0, 0, :, :, 0].detach().cpu().numpy()
             im = axes[idx, 3].imshow(input_slice, cmap='viridis')
             axes[idx, 3].set_title("Input (first timestep, first channel)")
         elif idx == 1:
-            # Sélectionner le premier pas de temps et le premier canal
             pred_slice = pred_seq[0, 0, :, :, 0].detach().cpu().numpy()
             im = axes[idx, 3].imshow(pred_slice, cmap='viridis')
             axes[idx, 3].set_title("Prediction (first timestep, first channel)")
@@ -125,10 +113,7 @@ def visualize_cams(cams, input, pred_seq, save_path):
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"Figure saved to: {save_path}")
-    
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"Figure saved to: {save_path}")
+
 
 if __name__ == "__main__":
     # Charger le module et la configuration

@@ -354,8 +354,45 @@ class CuboidERAModule(pl.LightningModule):
         print(pred_seq.shape, target.shape)
         loss = F.mse_loss(pred_seq, target)
         return pred_seq, loss, input, target, clim_tensor
+
+    
+    def visualize_saliency_maps(self,input_data, saliency_maps, num_channels):
+        B, T, H, W, C = input_data.shape
+        # detach and to numpy 
+        input_data = input_data.detach().cpu()
+        saliency_maps = saliency_maps.detach().cpu()
+        
+        for c in range(input_data.shape[self.channel_axis-1]-1):
+            # Somme sur le temps pour l'entrée et la carte de saillance, sur tous les échantillons du batch
+            input_spatial = input_data[:, :, :, :, c].sum(dim=(0, 1))  # Somme sur le batch (B) et le temps (T)
+            saliency_spatial = saliency_maps[:, :, :, :, c].sum(dim=(0, 1))  # Même chose pour la carte de saillance
+            
+            # Création de la figure
+            fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
+            
+            # Affichage de l'entrée
+            im1 = ax1.imshow(input_spatial, cmap='viridis')
+            ax1.set_title(f'Input - Channel {c}')
+            fig.colorbar(im1, ax=ax1)
+            
+            # Affichage de la carte de saillance
+            im2 = ax2.imshow(saliency_spatial, cmap='hot')
+            ax2.set_title(f'Saliency Map - Channel {c}')
+            fig.colorbar(im2, ax=ax2)
+            
+            # Superposition de la carte de saillance sur l'entrée
+            im3 = ax3.imshow(input_spatial, cmap='viridis')
+            im3 = ax3.imshow(saliency_spatial, cmap='hot', alpha=0.5)
+            ax3.set_title(f'Overlay - Channel {c}')
+            fig.colorbar(im3, ax=ax3)
+            
+            plt.tight_layout()
+            plt.savefig(f'saliency_map_channel_{c}.png')
+            plt.close()
+
     
     def compute_saliency_map(self, batch):
+        self.eval()
         pred_seq, loss, input, target, clim_tensor = self.forward(batch)
         
         # Backpropagate to compute the gradient of the loss with respect to the input
@@ -363,6 +400,18 @@ class CuboidERAModule(pl.LightningModule):
         
         # Saliency is the absolute value of the gradient
         saliency = input.grad.data.abs()
+        
+        self.visualize_saliency_maps(input, saliency, input.shape[self.channel_axis-1])
+
+        # faire saliency vairable 
+        saliency_variable = saliency[0].sum(dim=(0, 1, 2))
+        print("saliency_variable", saliency_variable)
+
+        # faire saliency temporelle
+        saliency_temporal = saliency[0].sum(dim=(1, 2,3))
+        print("saliency_temporal", saliency_temporal)
+
+
         
         # Optionally, take the maximum across the channel dimension if input has multiple channels
         saliency, _ = torch.max(saliency, dim=1)  # This reduces the saliency map to (N, lat, lon)
