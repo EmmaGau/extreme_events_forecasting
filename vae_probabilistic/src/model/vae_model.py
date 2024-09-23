@@ -31,7 +31,7 @@ exps_dir = os.path.join(_parent_dir, 'experiments')
 os.makedirs(exps_dir, exist_ok=True)
 
 class VAE3DLightningModule(pl.LightningModule):
-    def __init__(self, config_file_path,save_dir, input_dims, output_dims):
+    def __init__(self, config_file_path, save_dir, input_dims, output_dims):
         super().__init__()
         oc = OmegaConf.load(open(config_file_path))
         self.config = OmegaConf.to_object(oc)
@@ -104,7 +104,6 @@ class VAE3DLightningModule(pl.LightningModule):
             "logger": logger,
             "callbacks": callbacks,
             "log_every_n_steps": config['logging']['log_every_n_steps'],
-            "deterministic": True
         }
         
         return trainer_kwargs
@@ -144,7 +143,7 @@ class VAE3DLightningModule(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         input, target, *_ = batch
         pred, target, mu, log_var = self(input, target)
-        loss_dict = self.model.loss_function(pred,target, mu, log_var, M_N=self.config['data']['batch_size'] / self.config['data']['num_train_samples'])
+        loss_dict = self.model.loss_function(pred,target, mu, log_var, M_N=1.0)
         loss = loss_dict['loss']
         
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)

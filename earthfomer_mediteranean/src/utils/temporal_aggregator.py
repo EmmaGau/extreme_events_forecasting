@@ -4,14 +4,13 @@ import numpy as np
 from enum import Enum
 import xarray as xr
 import torch 
-from utils.statistics import DataScaler
 from utils.enums import StackType, Resolution
 from utils.statistics import DataStatistics
 from typing import List
 from utils.tools import AreaDataset
 
 # à la place faire une rolling mean
-# en gros l'idée c'est d'avoir en parametre le type de stack = [1,7,14,30]
+# en gros l'idée c'est d'avoir en parametre le type de stack = [1,7,1:4,30]
 # ca veut dire on lui donne le dernier j, la rolling mean sur les 7 d'avant, les 14 d'avant, les 30 d'avant
 # donc pour créer les données aggrgés on va stacker toutes ces moyennes et s'assurer qu'il nous reste assez de de timepoints
 # pour creer la target 
@@ -22,7 +21,7 @@ from utils.tools import AreaDataset
 MAPPING_SEASON= {"DJF": 0, "MAM": 1, "JJA": 2, "SON": 3}
 
 class TemporalAggregator:
-    def __init__(self, dataset: xr.Dataset, target: xr.Dataset, clim: xr.Dataset, in_len: int, out_len: int, resolution_input: int, resolution_output: int, gap: int = 1):
+    def __init__(self, dataset: xr.Dataset, target: xr.Dataset, clim: xr.Dataset, in_len: int, out_len: int, resolution_input: int, resolution_output: int, gap: int = 1, lead_time_gap: int = 0):
         self.name = "TemporalAggregator"
         # dataset parameters 
         self.dataset = dataset
@@ -35,6 +34,7 @@ class TemporalAggregator:
         self.resolution_input = resolution_input
         self.resolution_output = resolution_output
         self.gap = gap
+        self.lead_time_gap = lead_time_gap
 
         # group data by wet season
         self.wet_season_data = self._group_by_wet_season(self.dataset)
@@ -92,10 +92,11 @@ class TemporalAggregator:
         for year, wet_season in self.wet_season_data:
             width_input = self.in_len * self.resolution_input
             width_output = self.out_len * self.resolution_output
-            total_width = width_input + width_output
+            total_width = width_input + self.lead_time_gap + width_output
             season_length = len(wet_season.time.values)
 
             print(f"Processing wet season year {year} with {season_length} days.")
+            print(f"Total width required: {total_width} (input: {width_input}, lead_time_gap: {self.lead_time_gap}, output: {width_output})")
             
             if season_length >= total_width:
                 num_samples = ((season_length - total_width) // self.gap) + 1
@@ -129,9 +130,22 @@ class TemporalAggregator:
 
         # Récupérer les données d'entrée et de sortie
         input_time_indexes = wet_season.time.values[local_idx:local_idx + width_input:self.resolution_input]
-        target_time_indexes = wet_season_target.time.values[local_idx + width_input:local_idx + width_input + width_output:self.resolution_output]
+        target_start_idx = local_idx + width_input + self.lead_time_gap
+        target_time_indexes = wet_season_target.time.values[target_start_idx:target_start_idx + width_output:self.resolution_output]
         print(f"  -> Input time indexes: {input_time_indexes}")
         print(f"  -> Target time indexes: {target_time_indexes}")
+        print(f"  -> Lead time gap: {self.lead_time_gap} days")
+
+         # Vérifier que le lead_time_gap est correctement appliqué
+        expected_gap = self.lead_time_gap + self.resolution_input
+        actual_gap = (pd.Timestamp(target_time_indexes[0]) - pd.Timestamp(input_time_indexes[-1])).days
+        print(f"  -> Actual gap between input and target: {actual_gap} days")
+        print(f"  -> Expected gap: {expected_gap} days (lead_time_gap + resolution_input)")
+        
+        if actual_gap != expected_gap:
+            print(f"  -> Warning: Actual gap ({actual_gap}) differs from expected gap ({expected_gap})")
+        else:
+            print(f"  -> Gap verification successful: Actual gap matches expected gap")
 
         input_data = wet_season.sel(time=input_time_indexes)
         target_data = wet_season_target.sel(time=target_time_indexes)
@@ -169,6 +183,8 @@ class TemporalAggregatorFactory:
         self.resolution_input = config['resolution_input']
         self.resolution_output = config['resolution_output']
         self.gap = config['gap']
+        self.lead_time_gap = config.get('lead_time_gap', 0)
+        print(f"Initialized TemporalAggregatorFactory with lead_time_gap: {self.lead_time_gap}")
 
     def create_aggregator(self, dataset : xr.Dataset, target: xr.Dataset, clim: xr.Dataset):
         
@@ -180,8 +196,34 @@ class TemporalAggregatorFactory:
             out_len=self.out_len,
             resolution_input=self.resolution_input,
             resolution_output=self.resolution_output,
-            gap = self.gap
+            gap = self.gap,
+            lead_time_gap = self.lead_time_gap
         )
 
 if __name__ == "__main__":
-    pass
+    # Example usage
+    config = {
+        'in_len': 6,
+        'out_len': 3,
+        'resolution_input': 7,
+        'resolution_output': 7,
+        'gap': 1,
+        'lead_time_gap': 14
+    }
+    
+    # Create dummy datasets for testing
+    dates = pd.date_range(start='2020-01-01', end='2021-12-31', freq='D')
+    dataset = xr.Dataset({'var': ('time', np.random.rand(len(dates)))}, coords={'time': dates})
+    target = xr.Dataset({'var': ('time', np.random.rand(len(dates)))}, coords={'time': dates})
+    clim = xr.Dataset({'var': ('dayofyear', np.random.rand(366))}, coords={'dayofyear': range(1, 367)})
+
+    factory = TemporalAggregatorFactory(config)
+    aggregator = factory.create_aggregator(dataset, target, clim)
+    
+    # Test the aggregator
+    for i in range(5):
+        print(f"\nTesting aggregation for index {i}")
+        aggregator.aggregate(i)
+
+    print("\nComputing dataset length:")
+    aggregator.compute_len_dataset()

@@ -3,6 +3,8 @@ from torch import nn
 from torch.nn import functional as F
 from typing import List, Tuple
 import numpy as np
+import torch
+torch.set_default_tensor_type(torch.FloatTensor)
 
 class Encoder(nn.Module):
     def __init__(self, in_channels, hidden_dims, latent_dim, input_dims, layout="THWC", use_attention=False, num_heads=8):
@@ -107,17 +109,18 @@ class Decoder(nn.Module):
 
         self.decoder_input = nn.Linear(latent_dim, self.flattened_size)
 
-        # Calculate required upsampling factors
-        self.upsample_factors = [t // s for s, t in zip(self.encoder_out_dims, self.output_dims)]
-
         modules = []
         reversed_hidden_dims = hidden_dims[::-1]
 
-        current_dims = list(self.encoder_out_dims)
         for i in range(len(reversed_hidden_dims) - 1):
-            # Calculate stride and output padding for this layer
-            stride = tuple(min(2, factor) for factor in self.upsample_factors)
-            output_padding = tuple((factor + 1) % 2 for factor in self.upsample_factors)
+            if i == 0:
+                # First layer: upsample W more aggressively
+                stride = (1, 2, 4)
+                output_padding = (0, 1, 3)
+            else:
+                # Other layers: upsample T, H, and W equally
+                stride = (2, 2, 2)
+                output_padding = (1, 1, 1)
             
             modules.append(
                 nn.Sequential(
@@ -130,28 +133,23 @@ class Decoder(nn.Module):
                     nn.BatchNorm3d(reversed_hidden_dims[i + 1]),
                     nn.LeakyReLU())
             )
-            
-            # Update current dimensions and remaining upsample factors
-            current_dims = [cd * s for cd, s in zip(current_dims, stride)]
-            self.upsample_factors = [(f + 1) // 2 for f in self.upsample_factors]
 
         self.decoder = nn.Sequential(*modules)
 
         # Final convolution to get the correct number of channels
         self.final_conv = nn.Conv3d(reversed_hidden_dims[-1], self.out_channels, kernel_size=3, padding=1)
 
-        # Calculate the dimensions after upsampling
-        self.upsampled_dims = current_dims
-
     def calculate_encoder_output_dims(self, input_dims, num_layers):
         t, h, w = input_dims
         for i in range(num_layers):
-            if i >= num_layers - 2:
+            if i >= num_layers - 1:
+                w = (w - 1) // 4 + 1
+                h = (h - 1) // 2 + 1
+            else:
                 t = (t - 1) // 2 + 1
-            h = (h - 1) // 2 + 1
-            w = (w - 1) // 2 + 1
+                h = (h - 1) // 2 + 1
+                w = (w - 1) // 2 + 1
         return (t, h, w)
-
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         result = self.decoder_input(z)
@@ -159,11 +157,8 @@ class Decoder(nn.Module):
         result = self.decoder(result)
         result = self.final_conv(result)
 
-        # Crop the result to the desired output dimensions
-        result = result[:, :,
-                        :self.output_dims[0], 
-                        :self.output_dims[1], 
-                        :self.output_dims[2]]
+        # Use adaptive average pooling to get the exact output dimensions
+        result = F.adaptive_avg_pool3d(result, self.decoder_output_dims)
 
         if self.layout == "THWC":
             result = result.permute(0, 2, 3, 4, 1)
@@ -180,7 +175,7 @@ class BetaVAE3D(nn.Module):
                  latent_dim: int,
                  hidden_dims: List = None,
                  layout: str = "THWC",
-                 beta: int = 4,
+                 beta: int = 1,
                  gamma: float = 1000.,
                  max_capacity: int = 25,
                  Capacity_max_iter: int = 1e5,
@@ -212,6 +207,7 @@ class BetaVAE3D(nn.Module):
 
 
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> List[torch.Tensor]:
+        input, target = input.float(), target.float()
         mu, log_var = self.encoder(input)
         z = self.reparameterize(mu, log_var)
         result = self.decoder(z)
@@ -239,7 +235,7 @@ class BetaVAE3D(nn.Module):
         if self.loss_type == 'H':
             loss = pred_loss + self.beta * kld_weight * kld_loss
         elif self.loss_type == 'B':
-            self.C_max = self.C_max.to(input.device)
+            self.C_max = self.C_max.to(target.device)
             C = torch.clamp(self.C_max/self.C_stop_iter * self.num_iter, 0, self.C_max.data[0])
             loss = pred_loss + self.gamma * kld_weight * (kld_loss - C).abs()
         else:
@@ -259,7 +255,8 @@ class BetaVAE3D(nn.Module):
 if __name__ == '__main__':
     # Test the BetaVAE3D model
     x = torch.randn(1,6, 111, 360, 6) # (B, T, H, W, C)
-    model = BetaVAE3D(layout = "THWC",latent_dim=10, input_dims=(6, 111, 360, 6), output_dims = (4, 1, 5, 1))
+    y = torch.randn(1,4, 1, 5, 1) # (B, T, H, W, C
+    model = BetaVAE3D(layout = "THWC",latent_dim=2000, input_dims=(6, 111, 360, 6), output_dims = (4, 15, 50, 1))
 
-    output = model(x)
+    output = model(x,y)
     print(output[2].shape)

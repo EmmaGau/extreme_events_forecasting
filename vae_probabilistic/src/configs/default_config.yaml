@@ -1,7 +1,7 @@
 model:
-  latent_dim : 10
+  latent_dim : 9000
   hidden_dims : [32, 64, 128, 256, 512]
-  beta: 4
+  beta: 7
   layout: "THWC"
   gamma: 1000.
   max_capacity: 25
@@ -40,12 +40,12 @@ data:
     land_sea_mask: '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc'
     spatial_resolution: 1
     predict_sea_land: false 
-    out_spatial_resolution: 1
+    out_spatial_resolution: 10
     sum_pr: True
-    coarse_t : false
-    coarse_s : false
-    coarse_s_target: false
-    coarse_t_target: false
+    coarse_t : true
+    coarse_s : true
+    coarse_s_target: true
+    coarse_t_target: true
   scaler:
     mode: 'standardize'
   temporal_aggregator:
