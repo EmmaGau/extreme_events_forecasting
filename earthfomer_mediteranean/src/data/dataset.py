@@ -135,6 +135,13 @@ class DatasetEra(Dataset):
         # Apply scaling
         standardized_data = self.scaler.transform(data_class.data, statistics)
         return standardized_data
+
+    def reverse_scaling(self, data_class: AreaDataset):
+        computer = DataStatistics(self.scaling_years, self.relevant_months, coarse_temporal = data_class.coarse_t, coarse_spatial = data_class.coarse_s)
+        statistics = computer._get_stats(data_class)
+        # Apply scaling
+        unstandardized_data = self.scaler.inverse_transform(data_class.data, statistics)
+        return unstandardized_data
     
     def get_scaled_climatology(self):
         clim = self.compute_climatology()["mean"]
