@@ -81,15 +81,14 @@ class VAE3DLightningModule(pl.LightningModule):
         
         # ModelCheckpoint callback
         checkpoint_callback = ModelCheckpoint(
-            dirpath=os.path.join(self.save_dir, "checkpoints", "loss"),
-            filename='{epoch:02d}-{val_loss:.2f}',
-            save_top_k= config['optim']['save_top_k'],
+            dirpath=os.path.join(self.save_dir, "checkpoints"),
+            filename='{epoch:02d}-{val_prediction_loss:.2f}-{val_kld_loss:.2f}',
+            save_top_k=config['optim']['save_top_k'],
             verbose=True,
             monitor='val_loss',
             mode='min'
-        )
+            )
         callbacks.append(checkpoint_callback)
-        
         # LearningRateMonitor callback
         lr_monitor = LearningRateMonitor(logging_interval='step')
         callbacks.append(lr_monitor)
@@ -141,7 +140,8 @@ class VAE3DLightningModule(pl.LightningModule):
         return self.model(input,target)
 
     def training_step(self, batch, batch_idx):
-        input, target, *_ = batch
+        print(batch)
+        input, target, season_float, year_float, clim_tensor, *_ = batch
         pred, target, mu, log_var = self(input, target)
         loss_dict = self.model.loss_function(pred,target, mu, log_var, M_N=1.0)
         loss = loss_dict['loss']
@@ -149,11 +149,15 @@ class VAE3DLightningModule(pl.LightningModule):
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         self.log('train_prediction_loss', loss_dict['prediction_Loss'], on_step=True, on_epoch=True, logger=True)
         self.log('train_kld_loss', loss_dict['KLD'], on_step=True, on_epoch=True, logger=True)
+        # add skill score with cliamtology
+        mse_clim = torch.nn.functional.mse_loss(target, clim_tensor)
+        skill_score = 1 - (loss_dict['prediction_Loss']/mse_clim)
+        self.log('train_skill_score', skill_score, on_step=True, on_epoch=True, logger=True)
         
         return loss
 
     def validation_step(self, batch, batch_idx):
-        input, target, *_ = batch 
+        input, target, season_float, year_float, clim_tensor, *_ = batch
         pred,target, mu, log_var = self(input, target)
         loss_dict = self.model.loss_function(pred,target, mu, log_var, M_N=1.0)
         loss = loss_dict['loss']
@@ -161,11 +165,16 @@ class VAE3DLightningModule(pl.LightningModule):
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         self.log('val_prediction_loss', loss_dict['prediction_Loss'], on_step=False, on_epoch=True, logger=True)
         self.log('val_kld_loss', loss_dict['KLD'], on_step=False, on_epoch=True, logger=True)
+
+        # add skill score with cliamtology
+        mse_clim = torch.nn.functional.mse_loss(target, clim_tensor)
+        skill_score = 1 - (loss_dict['prediction_Loss']/mse_clim)
+        self.log('val_skill_score', skill_score, on_step=False, on_epoch=True, logger=True)
         
         return loss
 
     def test_step(self, batch, batch_idx):
-        input, target, *_ = batch
+        input, target, season_float, year_float, clim_tensor, *_ = batch
         input.shape
         pred, target, mu, log_var = self(input, target)
         loss_dict = self.model.loss_function(pred,target, mu, log_var, M_N=1.0)
@@ -174,7 +183,11 @@ class VAE3DLightningModule(pl.LightningModule):
         self.log('test_loss', loss, on_step=False, on_epoch=True, logger=True)
         self.log('test_prediction_loss', loss_dict['prediction_Loss'], on_step=False, on_epoch=True, logger=True)
         self.log('test_kld_loss', loss_dict['KLD'], on_step=False, on_epoch=True, logger=True)
-        
+
+        # add skill score with cliamtology
+        mse_clim = torch.nn.functional.mse_loss(target, clim_tensor)
+        skill_score = 1 - (loss_dict['prediction_Loss']/mse_clim)
+        self.log('test_skill_score', skill_score, on_step=False, on_epoch=True, logger=True)
         return loss
 
 
