@@ -12,6 +12,7 @@ import argparse
 import time
 from copy import deepcopy
 from model.vae_net import BetaVAE3D  # Import your BetaVAE3D model
+from model.vae_bis import BetaVAE3DLatent
 from copy import deepcopy
 from shutil import copyfile
 # Ajoutez le répertoire parent de 'data' au sys.path
@@ -35,24 +36,36 @@ class VAE3DLightningModule(pl.LightningModule):
         super().__init__()
         oc = OmegaConf.load(open(config_file_path))
         self.config = OmegaConf.to_object(oc)
+        model_type = self.config['model'].get('model_type', 'BetaVAE3D')
         self.save_dir = save_dir
 
         self.save_hyperparameters()
 
-        self.model = BetaVAE3D(
-            input_dims=input_dims,
-            output_dims=output_dims,
-            latent_dim=self.config['model']['latent_dim'],
-            hidden_dims=self.config['model']['hidden_dims'],
-            layout=self.config['model']['layout'],
-            beta=self.config['model']['beta'],
-            gamma=self.config['model']['gamma'],
-            max_capacity=self.config['model']['max_capacity'],
-            Capacity_max_iter=self.config['model']['Capacity_max_iter'],
-            loss_type=self.config['model']['loss_type'],
-            num_heads=self.config['model']['num_heads'],
-            use_attention=self.config['model']['use_attention']
-        )
+        if model_type == 'BetaVAE3D':
+            self.model = BetaVAE3D(
+                input_dims=input_dims,
+                output_dims=output_dims,
+                latent_dim=self.config['model']['latent_dim'],
+                hidden_dims=self.config['model']['hidden_dims'],
+                layout=self.config['model']['layout'],
+                beta=self.config['model']['beta'],
+                gamma=self.config['model']['gamma'],
+                max_capacity=self.config['model']['max_capacity'],
+                Capacity_max_iter=self.config['model']['Capacity_max_iter'],
+                loss_type=self.config['model']['loss_type'],
+                num_heads=self.config['model']['num_heads'],
+                use_attention=self.config['model']['use_attention']
+            )
+
+        elif model_type == 'BetaVAE3DLatent':
+            self.model = BetaVAE3DLatent(
+                input_dims=input_dims,
+                output_dims=output_dims,
+                latent_dims=self.config['model']['latent_dim'],
+                hidden_dims=self.config['model']['hidden_dims'],
+                layout=self.config['model']['layout'],
+                beta=self.config['model']['beta'])
+
         self.configure_save(config_file_path)
 
     def configure_save(self, cfg_file_path=None):
@@ -231,6 +244,7 @@ def cli_main():
 
     if args.cfg is None:
         args.cfg = "/home/egauillard/extreme_events_forecasting/vae_probabilistic/src/configs/default_config.yaml"
+    args.cfg = "/home/egauillard/extreme_events_forecasting/vae_probabilistic/src/configs/default_config.yaml"
     
     oc_from_file = OmegaConf.load(open(args.cfg, "r"))
     dataset_cfg = OmegaConf.to_object(oc_from_file.data)

@@ -228,6 +228,8 @@ class BetaVAE3D(nn.Module):
         print('target and pred shape')
         print(pred.shape, target.shape)
 
+        
+
         pred_loss = F.mse_loss(pred, target)
 
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0)
