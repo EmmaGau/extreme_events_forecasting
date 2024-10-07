@@ -5,9 +5,7 @@ from enum import Enum
 import xarray as xr
 import torch 
 from utils.enums import StackType, Resolution
-from utils.statistics import DataStatistics
 from typing import List
-from utils.tools import AreaDataset
 
 # à la place faire une rolling mean
 # en gros l'idée c'est d'avoir en parametre le type de stack = [1,7,1:4,30]
