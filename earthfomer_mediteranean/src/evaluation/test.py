@@ -17,19 +17,14 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 import matplotlib.ticker as mticker
-from utils.statistics import DataStatistics
 import random
 
 
 class Evaluation:
-    def __init__(self, checkpoint_path, config_path, test_dataset, scaler):
+    def __init__(self, checkpoint_path, config_path, test_dataset):
         self.checkpoint_path = checkpoint_path
         self.config_path = config_path
         self.test_dataset = test_dataset
-        print(self.test_dataset.relevant_years)
-        print(self.test_dataset.target_class.data)
-        #(TODO) changer scaler et statistics
-        self.scaler = scaler
 
         self.save_folder = self.create_save_folder()
         self.model = None
@@ -37,31 +32,25 @@ class Evaluation:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
          
         self.unity = {"tp": "mm", "t2m": "K"}
+        self.var_all_names = {"tp": "Total Precipitation", "t2m": "Temperature"}
         self.resolution_output = test_dataset.resolution_output
         self.out_spatial_resolution = test_dataset.out_spatial_resolution
 
         self.target_class = test_dataset.target_class
-        computer = DataStatistics(years = test_dataset.scaling_years, months = test_dataset.relevant_months, coarse_temporal = self.target_class.coarse_t, coarse_spatial = self.target_class.coarse_s)
-        self.statistics = computer._get_stats(test_dataset.target_class)
     
-    def inverse_scaling(self, data):
-        return self.scaler.inverse_transform(data, self.statistics)
 
     def create_save_folder(self):
-        checkpoint_dir, _ = os.path.split(self.checkpoint_path)
+        checkpoint_dir, checkpoint_id = os.path.split(self.checkpoint_path)
+        exp_dir = checkpoint_dir.split('/checkpoints')[0]
+        if '/checkpoints' in exp_dir:
+            exp_dir = exp_dir.rsplit('/checkpoints', 1)[0]
+        print(f"Checkpoints found in path. Experiment directory: {exp_dir}")
 
-        if '/checkpoints/' in checkpoint_dir:
-            exp_dir = checkpoint_dir.split('/checkpoints/')[0]
-            print(f"Checkpoints found in path. Experiment directory: {exp_dir}")
-        else:
-            # Handle the case where 'checkpoints' is not in the path (fallback for older structure)
-            exp_dir = os.path.dirname(os.path.dirname(self.checkpoint_path))
-            print(f"Checkpoints not found in path. Fallback experiment directory: {exp_dir}")
-
-        save_folder = os.path.join(exp_dir, 'inference_plots')
+        save_folder = os.path.join(exp_dir, 'inference_plots', checkpoint_id)
         os.makedirs(save_folder, exist_ok=True)
         print(f"Save folder created at: {save_folder}")
         return save_folder
+
 
     def load_model(self):
         oc = OmegaConf.load(self.config_path)
@@ -127,8 +116,8 @@ class Evaluation:
         self.clim_test = np.concatenate(clim_test, axis=0)
 
         # Calculate climatology
-        self.climatology_mean= self.test_dataset.compute_climatology()["mean"]
-        self.climatology_std = self.test_dataset.compute_climatology()["std"]
+        self.climatology_mean= self.target_class.climatology["mean"]
+        self.climatology_std = self.target_class.climatology["std"]
 
 
     def create_data_arrays(self):
@@ -206,21 +195,13 @@ class Evaluation:
             print("ds_clim_test", ds_clim_test)
 
             # Appliquer l'inverse scaling séparément
-            ds_predictions = self.inverse_scaling(ds_predictions)
-            ds_ground_truth = self.inverse_scaling(ds_ground_truth)
-            ds_clim_test = self.inverse_scaling(ds_clim_test)  # Appliquer l'inverse scaling à clim_test
+            ds_predictions = self.target_class.inverse_transform(ds_predictions)
+            ds_ground_truth = self.target_class.inverse_transform(ds_ground_truth)
+            ds_clim_test =  self.target_class.inverse_transform(ds_clim_test)  # Appliquer l'inverse scaling à clim_test
             print("ds_predictions", ds_predictions)
             print("ds_ground_truth", ds_ground_truth)
             print("ds_climatology", ds_climatology)
             print("ds_clim_test", ds_clim_test)
-
-            # mutliplier par 1000 pour les précipitations
-            if "tp" in self.test_dataset.target_variables:
-                ds_predictions["tp"] *= 1000
-                ds_ground_truth["tp"] *= 1000
-                ds_climatology["tp"] *= 1000
-                ds_clim_test["tp"] *= 1000
-                ds_climatology_std["tp"] *= 1000
 
             self.all_datasets_predictions.append(ds_predictions)
             self.all_datasets_ground_truth.append(ds_ground_truth)
@@ -230,9 +211,10 @@ class Evaluation:
 
     def generate_plots(self):
         n_samples = len(self.all_datasets_predictions)
-        random_samples = random.sample(range(n_samples), min(10, n_samples))
+        random_samples = random.sample(range(n_samples), min(5, n_samples))
 
         for var_name in self.test_dataset.target_variables:
+
             for sample in random_samples:
                 pred_dataset = self.all_datasets_predictions[sample]
                 truth_dataset = self.all_datasets_ground_truth[sample]
@@ -241,17 +223,16 @@ class Evaluation:
                 time_steps = pred_dataset.time.values
                 n_lead_times = len(time_steps)
 
-                fig, axs = plt.subplots(3, n_lead_times, figsize=(5*n_lead_times, 15), 
-                                        subplot_kw={'projection': ccrs.PlateCarree()})
+                # Create figure with GridSpec
+                fig = plt.figure(figsize=(5*n_lead_times + 1, 15))
+                gs = fig.add_gridspec(3, n_lead_times + 1, width_ratios=[1]*n_lead_times + [0.1])
 
-                if n_lead_times == 1:
-                    axs = axs.reshape(3, 1)
+                axs = [[fig.add_subplot(gs[i, j], projection=ccrs.PlateCarree()) for j in range(n_lead_times)] for i in range(3)]
 
                 lats = [30] + list(pred_dataset[var_name].latitude.values) + [45]
                 lons = [-10] + list(pred_dataset[var_name].longitude.values) + [40]
 
                 cmap = 'Blues' if var_name == "tp" else 'Reds'
-
 
                 for lead_time, time in enumerate(time_steps):
                     pred = pred_dataset[var_name].sel(time=time)
@@ -262,7 +243,7 @@ class Evaluation:
                     vmax = max(pred.max().item(), truth.max().item(), clim.max().item())
 
                     for row, data in enumerate([pred, truth, clim]):
-                        ax = axs[row, lead_time]
+                        ax = axs[row][lead_time]
                         
                         im = ax.imshow(data, vmin=vmin, vmax=vmax, cmap=cmap,
                                     extent=[lons[0], lons[-1], lats[0], lats[-1]],
@@ -277,8 +258,9 @@ class Evaluation:
                                         linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
                         gl.xlocator = mticker.FixedLocator(range(-10, 41, 10))
                         gl.ylocator = mticker.FixedLocator(range(30, 46, 5))
+                        gl.top_labels = False
+                        gl.right_labels = False
                         
-                        import pandas as pd
                         python_datetime = pd.Timestamp(time).to_pydatetime()
                         if row == 0:
                             title = f'Prediction average - {str(time)[:10]}'
@@ -288,16 +270,13 @@ class Evaluation:
                             title = f'Climatology average - {str(time)[:10]}'
                         ax.set_title(title, fontsize=10)
 
-                # Adjust layout to remove extra space
-                plt.tight_layout(w_pad=0.5, h_pad=1.0)
-
                 # Add a common colorbar to the right side
-                cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
+                cbar_ax = fig.add_subplot(gs[:, -1])
                 cbar = fig.colorbar(im, cax=cbar_ax)
-                cbar.set_label(var_name, rotation=270, labelpad=15)
+                cbar.set_label(self.var_all_names[var_name], rotation=270, labelpad=15)
 
-                # Adjust the figure size to accommodate the colorbar
-                fig.set_size_inches(5*n_lead_times + 1, 15)
+                # Adjust layout
+                plt.tight_layout()
 
                 plt.savefig(os.path.join(self.save_folder, f'{var_name}_sample_{sample}_all_lead_times.png'), 
                             bbox_inches='tight', dpi=300)
@@ -407,9 +386,9 @@ class Evaluation:
                 self.r2_model[var].append(r2_model)
                 self.r2_climatology[var].append(r2_clim)
 
-        # transformer tous les rmse par grid cell 
-        self.rmse_climatology = {key: [v / self.out_spatial_resolution for v in value] for key, value in self.rmse_climatology.items()}
-        self.rmse_model = {key: [v / self.out_spatial_resolution for v in value] for key, value in self.rmse_model.items()}
+        # # transformer tous les rmse par grid cell 
+        # self.rmse_climatology = {key: [v  for v in value] for key, value in self.rmse_climatology.items()}
+        # self.rmse_model = {key: [v  for v in value] for key, value in self.rmse_model.items()}
 
 
 
@@ -463,6 +442,21 @@ class Evaluation:
             plt.legend(fontsize=12, loc='upper right')
             plt.tight_layout()
             plt.savefig(os.path.join(self.save_folder, f'{var}_r2_comparison.png'), dpi=300, bbox_inches='tight')
+            plt.close()
+
+
+            # Plot Skill Score
+            plt.figure(figsize=(12, 7))
+            plt.plot(lead_times, self.skill_score[var], 'o-', label=f'Skill Score', markersize=6)
+            plt.axhline(y=0, color='r', linestyle='--', label='No Skill Line')
+            plt.title(f'Skill Score vs Lead Time - {var}', fontsize=16)
+            plt.xlabel('Lead Time', fontsize=14)
+            plt.ylabel('Skill Score', fontsize=14)
+            plt.xticks(lead_times, x_labels, rotation=45, ha='right')
+            plt.grid(True, which='both', linestyle='--', alpha=0.7)
+            plt.legend(fontsize=12, loc='upper right')
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.save_folder, f'{var}_skill_score.png'), dpi=300, bbox_inches='tight')
             plt.close()
 
 
@@ -620,8 +614,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     checkpoint_path = args.checkpoint_path
 
-    # checkpoint_path = "/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240818_171920_every_coarse_2005_10/checkpoints/skill/model-skill-epoch=012-valid_skill_score=0.03.ckpt"
-
     exp_dir = checkpoint_path.split('/checkpoints/')[0]
     print(f"Experiment directory: {exp_dir}")
     config_path = os.path.join(exp_dir, 'cfg.yaml')
@@ -633,26 +625,24 @@ if __name__ == "__main__":
     lead_time = dataset_cfg['temporal_aggregator']['out_len']
 
     data_dirs = dataset_cfg['data_dirs']
-    scaler = DataScaler(dataset_cfg['scaler'])
     dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['resolution_output']* lead_time
 
     temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'])
 
-    test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory, scaler)
+    test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory)
 
     # save the whole dataset to get a climatology for the percentiles
     all_config = dataset_cfg.copy()
     all_config['dataset']['relevant_years'] = [1940, 2024]
 
-    data_class =  DatasetEra(all_config, data_dirs, temp_aggregator_factory, scaler)
-    target_class = data_class.reverse_scaling(data_class.target_class).to_netcdf(os.path.join(exp_dir, '1940_2024_target.nc'))
+    data_class =  DatasetEra(all_config, data_dirs, temp_aggregator_factory)
 
 
     # unscale the data
     
 
 
-    eval = Evaluation(checkpoint_path, config_path, test_dataset, scaler)
+    eval = Evaluation(checkpoint_path, config_path, test_dataset)
     print("ready to eval")
     eval.run_evaluation()
 
