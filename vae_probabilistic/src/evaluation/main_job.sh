@@ -47,10 +47,17 @@ python -c "import sys; print(sys.path)"
 # python evaluation/eval.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240919_180714/checkpoints/loss/epoch=10-val_loss=9.21.ckpt
 # python evaluation/eval.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240920_190320/checkpoints/loss/epoch=24-val_loss=16.62.ckpt
 
-python evaluation/main.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240923_182501_ld4000_beta4_gamma500_every_coarse_out10/checkpoints/loss/epoch=14-val_loss=5.58.ckpt
+# python evaluation/main.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240919_174408_ld4000_beta10_gamma1000_every_coarse/checkpoints/loss/epoch=17-val_loss=30.40.ckpt
+# python evaluation/main.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240919_180714_ld4000_beta10_gamma1000_every_coarse/checkpoints/loss/epoch=10-val_loss=9.21.ckpt
+# python evaluation/main.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240920_190320_ld9000_beta10_gamma1000_every_coarse/checkpoints/loss/epoch=24-val_loss=16.62.ckpt
+# python evaluation/main.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240920_190320_ld9000_beta10_gamma1000_every_coarse/checkpoints/loss/epoch=59-val_loss=20.73.ckpt
+
+# python evaluation/main.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240920_194025_ld9000_beta7_gamma1000_every_coarse/checkpoints/loss/epoch=20-val_loss=21.11.ckpt
 # python evaluation/main.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240923_110503_ld9000_beta7_gamma_1000_every_coarse/checkpoints/loss/epoch=09-val_loss=59.63.ckpt
 # python evaluation/main.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240923_135523_ld9000_beta7_gamma1000_coarse_input_fine_target/checkpoints/loss/epoch=29-val_loss=24.31.ckpt
-
 # python evaluation/main.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240923_151732_ld9000_beta7_gamma1000_every_coarse_out10/checkpoints/loss/epoch=20-val_loss=21.92.ckpt
-# python evaluation/main.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240924_133700_ld4000_beta4_gamma500_every_coarse_in_len9/checkpoints/loss/epoch=29-val_loss=8.02.ckpt
-# python evaluation/main.py --checkpoint_path /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240925_112910_ld4000_beta4_gamma500_every_coarse_only_med_input/checkpoints/epoch=19-val_prediction_loss=0.79-val_kld_loss=0.24.ckpt
+# python evaluation/main.py --checkpoint_path  /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240924_133700_ld4000_beta4_gamma500_every_coarse_in_len9/checkpoints/loss/epoch=12-val_loss=5.44.ckpt
+# python evaluation/main.py --checkpoint_path  /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240925_112910_ld4000_beta4_gamma500_every_coarse_only_med_input/checkpoints/epoch=29-val_prediction_loss=0.79-val_kld_loss=0.37.ckpt
+# python evaluation/main.py --checkpoint_path  /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20241001_164646/checkpoints/epoch=72-val_prediction_loss=1.14-val_kld_loss=10.38.ckpt
+python evaluation/main.py --checkpoint_path  /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20241002_175159/checkpoints/epoch=46-val_prediction_loss=141513.03-val_kld_loss=122.71.ckpt
+pyhton evaluation/main.py --checkpoint_path  /home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20241002_172453/checkpoints/epoch=99-val_prediction_loss=141510.98-val_kld_loss=10.00.ckpt

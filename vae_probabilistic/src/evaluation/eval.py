@@ -54,10 +54,13 @@ class Evaluation:
     def create_save_folder(self):
         checkpoint_dir, checkpoint_id = os.path.split(self.checkpoint_path)
 
-        exp_dir = checkpoint_dir.split('/checkpoints/')[0]
+        checkpoint_dir, checkpoint_id = os.path.split(self.checkpoint_path)
+        exp_dir = checkpoint_dir.split('/checkpoints')[0]
+        if '/checkpoints' in exp_dir:
+            exp_dir = exp_dir.rsplit('/checkpoints', 1)[0]
         print(f"Checkpoints found in path. Experiment directory: {exp_dir}")
 
-        save_folder = os.path.join(exp_dir, 'inference_plots', checkpoint_id)
+                save_folder = os.path.join(exp_dir, 'inference_plots', checkpoint_id)
         os.makedirs(save_folder, exist_ok=True)
         print(f"Save folder created at: {save_folder}")
         return save_folder
@@ -337,8 +340,8 @@ class Evaluation:
                 self.r2_climatology[var].append(r2_clim)
 
         # Transformer tous les RMSE par cellule de grille
-        self.rmse_climatology = {key: [v / self.out_spatial_resolution for v in value] for key, value in self.rmse_climatology.items()}
-        self.rmse_model = {key: [v / self.out_spatial_resolution for v in value] for key, value in self.rmse_model.items()}
+        # self.rmse_climatology = {key: [v / self.out_spatial_resolution for v in value] for key, value in self.rmse_climatology.items()}
+        # self.rmse_model = {key: [v / self.out_spatial_resolution for v in value] for key, value in self.rmse_model.items()}
         
     def plot_mse_curves(self):
         for var in self.test_dataset.target_variables:

@@ -10,8 +10,8 @@ import cartopy.feature as cfeature
 from scipy import stats
         
 class EnsembleEvaluation:
-    def __init__(self, pred_file, ground_truth_file, climatology_file, climatology_std_file, entire_era_file, var, save_dir):
-        self.pred_ds = self.transform_data(xr.open_dataset(pred_file)[var])
+    def __init__(self, pred_files, ground_truth_file, climatology_file, climatology_std_file, entire_era_file, var, save_dir):
+        self.pred_ds = self.load_predictions(pred_files, var)
         self.ground_truth = self.transform_data(xr.open_dataset(ground_truth_file)[var])
         self.climatology = self.transform_data(xr.open_dataset(climatology_file)[var])
         self.climatology_std = self.transform_data(xr.open_dataset(climatology_std_file)[var])
@@ -24,6 +24,17 @@ class EnsembleEvaluation:
         self.drought_threshold = self.era_entire.quantile(0.33, dim='time')
         self.categories = self.era_entire.quantile([0.3333, 0.6667], dim='time')
 
+    def load_predictions(self, pred_files, var):
+        if isinstance(pred_files, str):
+            # Single NetCDF file with all ensembles
+            return self.transform_data(xr.open_dataset(pred_files)[var])
+        elif isinstance(pred_files, list):
+            # List of NetCDF files, one for each ensemble member
+            ensemble_list = [self.transform_data(xr.open_dataset(f)[var]) for f in pred_files]
+            return xr.concat(ensemble_list, dim=pd.Index(range(len(ensemble_list)), name='ensemble'))
+        else:
+            raise ValueError("pred_files must be either a string (path to single NetCDF file) or a list of strings (paths to multiple NetCDF files)")
+
     def transform_data(self, da):
         mask = ~np.isnan(da).any(dim=['latitude', 'longitude'])
         valid_time_indices = xr.apply_ufunc(
@@ -34,6 +45,7 @@ class EnsembleEvaluation:
             vectorize=True
         )
         return da.isel(time=valid_time_indices)
+
 
     def calculate_scores(self):
         climatology_ensemble = self._create_climatology_ensemble()
