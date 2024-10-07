@@ -4,21 +4,17 @@ import xarray as xr
 import numpy as np 
 import torch 
 from utils.temporal_aggregator import TemporalAggregatorFactory
-from utils.tools import AreaDataset
+from data.area_dataset import AreaDataset
 from utils.enums import StackType, Resolution
-from utils.statistics import DataStatistics, DataScaler
 import wandb 
 import xclim
 
 class DatasetEra(Dataset):
-    # TODO in statistics add if target is "pr" then do sum else do mean
     def __init__(
         self,
         wandb_config : dict,
         data_dirs : str,
-        temporal_aggr_factory : TemporalAggregatorFactory,
-        scaler: DataScaler,
-    ):
+        temporal_aggr_factory : TemporalAggregatorFactory):
         """The dataset takes a data_dir mediteranean and data dir North Hemisphere
             oppens the data dir and reads the data with xarray, only take the 
             variables specified in the variables list
@@ -35,7 +31,6 @@ class DatasetEra(Dataset):
             temporal_aggregator (TemporalAggregator): _description_
             scaler (DataScaler, optional): _description_. Defaults to None.
         """
-        self.scaler = scaler
         self._initialize_config(wandb_config)
         self.data_dirs = data_dirs
         self.aggregator_factory = temporal_aggr_factory
@@ -50,8 +45,6 @@ class DatasetEra(Dataset):
         self.resolution_input = self.aggregator_factory.resolution_input
         self.resolution_output = self.aggregator_factory.resolution_output
         self.data, self.target = self._load_and_prepare_data()
-        self.data.to_netcdf("data_coarse.nc")
-        self.target.to_netcdf("target_coarse.nc")
         self.scaled_clim = self.get_scaled_climatology()
 
         self.aggregator = self.aggregator_factory.create_aggregator(self.data, self.target, self.scaled_clim)
@@ -77,6 +70,7 @@ class DatasetEra(Dataset):
         self.coarse_s = ds_conf.get("coarse_s", False)
         self.coarse_t_target = ds_conf.get("coarse_t_target", True)
         self.coarse_s_target = ds_conf.get("coarse_s_target", False)
+        self.scaling_mode = wandb_config["scaler"]["mode"]
         
         if "coarse" in wandb_config["scaler"].keys():
             self.coarse_t = wandb_config["scaler"]["coarse"]
@@ -88,11 +82,6 @@ class DatasetEra(Dataset):
         """Load data from a specified directory using xarray."""
         ds = xr.open_dataset(dir_path)
         return ds
-    
-    def compute_climatology(self):
-        computer = DataStatistics(self.scaling_years, self.relevant_months, coarse_temporal=False , coarse_spatial = False)
-        clim = computer._get_stats(self.target_class)
-        return clim 
             
     def expand_year_range(self,year_range):
         if len(year_range) != 2:
@@ -128,32 +117,9 @@ class DatasetEra(Dataset):
         
         return reference_dataset, new_dataset
 
-    #(TODO) : be able to retreive the right scaling to unscale, remove the coarse parameter of scaler without breaking everyhing
-    def process_scaling(self, data_class: AreaDataset):
-        computer = DataStatistics(self.scaling_years, self.relevant_months, coarse_temporal = data_class.coarse_t, coarse_spatial = data_class.coarse_s)
-        statistics = computer._get_stats(data_class)
-        # Apply scaling
-        standardized_data = self.scaler.transform(data_class.data, statistics)
-        return standardized_data
-
-    def reverse_scaling(self, data_class: AreaDataset):
-        computer = DataStatistics(self.scaling_years, self.relevant_months, coarse_temporal = data_class.coarse_t, coarse_spatial = data_class.coarse_s)
-        statistics = computer._get_stats(data_class)
-        # Apply scaling
-        unstandardized_data = self.scaler.inverse_transform(data_class.data, statistics)
-        return unstandardized_data
-    
     def get_scaled_climatology(self):
-        clim = self.compute_climatology()["mean"]
-        computer = DataStatistics(self.scaling_years, self.relevant_months, coarse_temporal = self.coarse_t_target, coarse_spatial = self.coarse_s_target)
-        stats = computer._get_stats(self.target_class)
-        if 'dayofyear' in stats["mean"].dims:
-            dayofyear = clim.dayofyear
-            standardized_clim = (clim - stats["mean"].sel(dayofyear=dayofyear)) / stats["std"].sel(dayofyear=dayofyear)
-        else:
-            standardized_clim = (clim - stats["mean"]) / stats["std"]
-        return standardized_clim
-
+        return self.target_class.scaled_climatology
+        
     def _load_and_prepare_data(self):
         """Load data from directories for all variables and create big dataset that contains all variables for both regions
             and keep the relevant years/months."""
@@ -204,15 +170,10 @@ class DatasetEra(Dataset):
         self.tropics_class = self._create_area_dataset("tropics", tropics_data, self.variables_tropics) if tropics_data is not None else None
         self.target_class = self._create_area_dataset("target", med_data[self.target_variables], self.target_variables, is_target=True)
 
-        # Mise à l'échelle des données
-        med_data = self.process_scaling(self.med_class)
-        nh_data = self.process_scaling(self.nh_class) if self.nh_class is not None else None
-        tropics_data = self.process_scaling(self.tropics_class) if self.tropics_class is not None else None
-
-        target = self.process_scaling(self.target_class)
-        print(self.target_class.spatial_resolution)
-
-        print("Data scaled")
+        target = self.target_class.scaled_data 
+        med_data = self.med_class.scaled_data
+        nh_data = self.nh_class.scaled_data if nh_data is not None else None
+        tropics_data = self.tropics_class.scaled_data if tropics_data is not None else None
 
         # Remapping et fusion des données
         data = self._remap_and_merge_data(med_data, nh_data, tropics_data)
@@ -234,7 +195,9 @@ class DatasetEra(Dataset):
             sum_pr = self.sum_pr,
             is_target = is_target,
             coarse_t = self.coarse_t_target if is_target else self.coarse_t,
-            coarse_s =  self.coarse_s_target if is_target else self.coarse_s)
+            coarse_s =  self.coarse_s_target if is_target else self.coarse_s,
+            scaling_years = self.scaling_years,
+            scaling_mode = self.scaling_mode)
 
     def _remap_and_merge_data(self, med_data, nh_data, tropics_data):
         # Trouver les temps communs à tous les jeux de données
@@ -265,17 +228,6 @@ class DatasetEra(Dataset):
         
         data = xr.merge(data_list, compat='override', join='inner')
         return data
-
-    def get_binary_sea_mask(self):
-        mask = xr.open_dataset(self.mask_path, chunks = None)
-        threshold = 0.3
-        mask["lsm"] = xr.apply_ufunc(
-            lambda x: (x > threshold).astype(int),
-            mask["lsm"],
-            dask="allowed",  # Si vous utilisez dask, sinon retirez cet argument
-            keep_attrs=True  # Conserver les attributs
-        )
-        return mask["lsm"]
 
     def remap_to_NH(self, nh_data, data_to_remap):
         """
@@ -341,6 +293,17 @@ class DatasetEra(Dataset):
         len = self.aggregator.compute_len_dataset()
         return len
     
+    def get_binary_sea_mask(self):
+        mask = xr.open_dataset(self.mask_path, chunks = None)
+        threshold = 0.3
+        mask["lsm"] = xr.apply_ufunc(
+            lambda x: (x > threshold).astype(int),
+            mask["lsm"],
+            dask="allowed",  # Si vous utilisez dask, sinon retirez cet argument
+            keep_attrs=True  # Conserver les attributs
+        )
+        return mask["lsm"]
+
     def _prepare_sea_land_target(self, target_data):
         sea_means = []
         land_means = []
@@ -419,16 +382,16 @@ if __name__ == "__main__":
         'target_variables': ['tp'],
         'relevant_years': [1940,1941],
         'relevant_months': [10,11,12,1,2,3],
-        'scaling_years': [1940,1941],
+        'scaling_years': [1940,2005],
         'land_sea_mask': '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc',
         'spatial_resolution': 1,
         'predict_sea_land': False,
         'out_spatial_resolution': 10,
         'sum_pr': True,
-        "coarse_t": True,
-        "coarse_s": True,
-        "coarse_t_target": True,
-        "coarse_s_target": True
+        "coarse_t":False,
+        "coarse_s": False,
+        "coarse_t_target": False,
+        "coarse_s_target": False
     },
     'scaler': {
         'mode': 'standardize',
@@ -443,15 +406,10 @@ if __name__ == "__main__":
     }
 }
 
-    # Initialize wandb
-    # wandb.init(project='linear_era', config=wandb_config)
-
     # Initialize dataset and dataloaders
-    scaler = DataScaler(wandb_config['scaler'])
     temp_aggregator_factory = TemporalAggregatorFactory(wandb_config['temporal_aggregator'])
     
-
-    train_dataset = DatasetEra(wandb_config, data_dirs, temp_aggregator_factory, scaler)
+    train_dataset = DatasetEra(wandb_config, data_dirs, temp_aggregator_factory)
     print("len dataset", train_dataset.__len__())
 
 
@@ -460,6 +418,7 @@ if __name__ == "__main__":
     sample = next(iter(dataloader))
 
     train_dataset.compute_climatology()
+
     
 
     

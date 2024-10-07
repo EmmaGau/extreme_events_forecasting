@@ -26,7 +26,7 @@ def reshape_transform(tensor, height=14, width=14):
 
 if __name__ == "__main__":
     # Charger le module et la configuration
-    checkpoint_path = "/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240822_003448_every_fine_15/checkpoints/loss/last.ckpt"
+    checkpoint_path = "/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240913_172122_every_coarse_lead_time_20_14/checkpoints/skill/model-skill-epoch=028-valid_skill_score=0.01.ckpt"
     exp_dir = checkpoint_path.split('/checkpoints/')[0]
     print(f"Experiment directory: {exp_dir}")
     config_path = os.path.join(exp_dir, 'cfg.yaml')
@@ -58,10 +58,36 @@ if __name__ == "__main__":
 
     smap = pl_module.compute_saliency_map(batch)
     print(smap)
+    grad_cam_dir = os.path.join(exp_dir, 'grad_cam')
+    os.makedirs(grad_cam_dir, exist_ok=True)
+    
+    # Save saliency map
+    np.save(os.path.join(grad_cam_dir, 'saliency_map.npy'), smap.cpu().numpy())
 
-    # Définir les couches cibles
+    # Plot and save saliency map
+    plt.figure(figsize=(10, 8))
+    plt.imshow(smap.cpu().numpy().mean(axis=0), cmap='viridis')
+    plt.colorbar()
+    plt.title('Saliency Map')
+    plt.savefig(os.path.join(grad_cam_dir, 'saliency_map.png'))
+    plt.close()
+
+    # Define target layers
     target_layers = [
         pl_module.torch_nn_module.encoder.blocks[0][0].attn_l[-1]]
 
     grad_module = GradCAM(pl_module, target_layers)
     cams = grad_module(batch[0], target_category=None)
+
+    # Save GradCAM results
+    for i, cam in enumerate(cams):
+        np.save(os.path.join(grad_cam_dir, f'gradcam_layer_{i}.npy'), cam.cpu().numpy())
+        
+        plt.figure(figsize=(10, 8))
+        plt.imshow(cam.cpu().numpy().mean(axis=0), cmap='jet')
+        plt.colorbar()
+        plt.title(f'GradCAM Layer {i}')
+        plt.savefig(os.path.join(grad_cam_dir, f'gradcam_layer_{i}.png'))
+        plt.close()
+
+    print(f"Saliency map and GradCAM results saved in {grad_cam_dir}")
