@@ -8,13 +8,15 @@ from data.area_dataset import AreaDataset
 from utils.enums import StackType, Resolution
 import wandb 
 import xclim
+import pandas as pd
 
 class DatasetEra(Dataset):
     def __init__(
         self,
         wandb_config : dict,
         data_dirs : str,
-        temporal_aggr_factory : TemporalAggregatorFactory):
+        temporal_aggr_factory : TemporalAggregatorFactory,
+        forecast_day : str = None):
         """The dataset takes a data_dir mediteranean and data dir North Hemisphere
             oppens the data dir and reads the data with xarray, only take the 
             variables specified in the variables list
@@ -44,7 +46,10 @@ class DatasetEra(Dataset):
         
         self.resolution_input = self.aggregator_factory.resolution_input
         self.resolution_output = self.aggregator_factory.resolution_output
-        self.data, self.target = self._load_and_prepare_data()
+        self.data, self.target = self._load_and_prepare_data()        
+        if forecast_day is not None:
+            self.select_for_specific_forecast_day(forecast_day)
+            
         self.scaled_clim = self.get_scaled_climatology()
 
         self.aggregator = self.aggregator_factory.create_aggregator(self.data, self.target, self.scaled_clim)
@@ -77,7 +82,15 @@ class DatasetEra(Dataset):
             self.coarse_t_target = wandb_config["scaler"]["coarse"]
             print(f"Applying {'coarse' if self.coarse_t else 'fine-grained'} temporal scaling for both input and target data.")
             
-    
+    def select_for_specific_forecast_day(self, forecast_day):
+        input_length = self.aggregator_factory.in_len*self.resolution_input + self.aggregator_factory.lead_time_gap
+        # the forecast day need to be shifted by resolution_output because in our dataset dates correspond
+        # to the rolling mean of the resolution_output in the right side of the window
+        input_start_date = pd.Timestamp(forecast_day) + pd.Timedelta(days= self.resolution_output) - pd.Timedelta(days=input_length)
+        end_date = self.data.time[-1].values
+        self.data = self.data.sel(time=slice(input_start_date, end_date))
+        self.target = self.target.sel(time=slice(input_start_date, end_date))
+
     def _load_data(self, dir_path):
         """Load data from a specified directory using xarray."""
         ds = xr.open_dataset(dir_path)
@@ -166,9 +179,10 @@ class DatasetEra(Dataset):
 
         # Créer les classes AreaDataset
         self.med_class = self._create_area_dataset("mediteranean", med_data, self.variables_med)
+        self.target_class = self._create_area_dataset("target", med_data[self.target_variables], self.target_variables, is_target=True)
         self.nh_class = self._create_area_dataset("north_hemisphere", nh_data, self.variables_nh) if nh_data is not None else None
         self.tropics_class = self._create_area_dataset("tropics", tropics_data, self.variables_tropics) if tropics_data is not None else None
-        self.target_class = self._create_area_dataset("target", med_data[self.target_variables], self.target_variables, is_target=True)
+        
 
         target = self.target_class.scaled_data 
         med_data = self.med_class.scaled_data
@@ -386,7 +400,7 @@ if __name__ == "__main__":
         'land_sea_mask': '/home/egauillard/data/ERA5_land_sea_mask_1deg.nc',
         'spatial_resolution': 1,
         'predict_sea_land': False,
-        'out_spatial_resolution': 10,
+        'out_spatial_resolution': 1,
         'sum_pr': True,
         "coarse_t":False,
         "coarse_s": False,
@@ -412,12 +426,13 @@ if __name__ == "__main__":
     train_dataset = DatasetEra(wandb_config, data_dirs, temp_aggregator_factory)
     print("len dataset", train_dataset.__len__())
 
+    clim_std = train_dataset.target_class.climatology["std"]
+    clim_std.to_netcdf("climatology_std.nc")
+
 
     dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
 
     sample = next(iter(dataloader))
-
-    train_dataset.compute_climatology()
 
     
 

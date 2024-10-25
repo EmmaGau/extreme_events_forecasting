@@ -71,7 +71,7 @@ class TemporalAggregator:
         return decoded_date
         
     def _group_by_wet_season(self, data):
-        self.start_month = 10
+        self.start_month = 9
         data['wet_season_year'] = data.time.dt.year * (data.time.dt.month >= self.start_month) + (data.time.dt.year - 1) * (data.time.dt.month < self.start_month)
         grouped_data = data.groupby('wet_season_year')
         return grouped_data

@@ -10,7 +10,6 @@ import cartopy.crs as ccrs
 from sklearn.metrics import mean_squared_error, r2_score
 from  model.earthformer_model import CuboidERAModule
 from utils.temporal_aggregator import TemporalAggregatorFactory
-from utils.statistics import DataScaler
 import argparse 
 from data.dataset import DatasetEra
 import cartopy.crs as ccrs
@@ -89,24 +88,19 @@ class Evaluation:
         with torch.no_grad():
             for batch in tqdm(test_dataloader, desc="Processing batches"):
                 print("first batch")
-                input_data, target_data, season_float, clim_target, year_float, input_time_indexes, target_time_indexes = batch
+                input_data, target_data, season_float, year_float,clim_target, input_time_indexes, target_time_indexes = batch
                 
                 input_data = input_data.to(self.device)
                 target_data = target_data.to(self.device)
                 
-                predictions,  loss, input, target,  clim = self.model((input_data, target_data, clim_target, season_float, year_float, input_time_indexes, target_time_indexes))
-                print("predictions", predictions)
-                print("loss", loss)
-                print("input", input)
-                print("target", target)
-                print("clim", clim)
+                predictions,  loss, input, target,  clim = self.model((input_data, target_data,  season_float, year_float, clim_target, input_time_indexes, target_time_indexes))
                 
                 all_inputs.append(input_data.cpu().numpy())
                 all_predictions.append(predictions.cpu().numpy())
                 all_ground_truth.append(target_data.cpu().numpy())
                 all_input_time_indexes.append(self.test_dataset.aggregator.decode_time_indexes(input_time_indexes.numpy()))
                 all_target_time_indexes.append(self.test_dataset.aggregator.decode_time_indexes(target_time_indexes.numpy()))
-                clim_test.append(clim.cpu().numpy())
+                clim_test.append(clim_target.cpu().numpy())
 
         self.all_inputs = np.concatenate(all_inputs, axis=0)
         self.all_predictions = np.concatenate(all_predictions, axis=0)
@@ -194,6 +188,7 @@ class Evaluation:
             print("ds_climatology", ds_climatology)
             print("ds_clim_test", ds_clim_test)
 
+
             # Appliquer l'inverse scaling séparément
             ds_predictions = self.target_class.inverse_transform(ds_predictions)
             ds_ground_truth = self.target_class.inverse_transform(ds_ground_truth)
@@ -202,6 +197,7 @@ class Evaluation:
             print("ds_ground_truth", ds_ground_truth)
             print("ds_climatology", ds_climatology)
             print("ds_clim_test", ds_clim_test)
+            print("stats", self.target_class.statistics)
 
             self.all_datasets_predictions.append(ds_predictions)
             self.all_datasets_ground_truth.append(ds_ground_truth)
@@ -386,11 +382,6 @@ class Evaluation:
                 self.r2_model[var].append(r2_model)
                 self.r2_climatology[var].append(r2_clim)
 
-        # # transformer tous les rmse par grid cell 
-        # self.rmse_climatology = {key: [v  for v in value] for key, value in self.rmse_climatology.items()}
-        # self.rmse_model = {key: [v  for v in value] for key, value in self.rmse_model.items()}
-
-
 
     def plot_mse_curves(self):
         for var in self.test_dataset.target_variables:
@@ -465,6 +456,7 @@ class Evaluation:
         self.spatial_rmse_model = {}
         self.spatial_mse_climatology = {}
         self.spatial_rmse_climatology = {}
+        self.spatial_acc = {}  # Ajout pour le spatial ACC
         
         for var in self.test_dataset.target_variables:
             mse_model = np.zeros_like(self.all_datasets_ground_truth[0][var].isel(time=0).values)
@@ -472,14 +464,25 @@ class Evaluation:
             truth_min = np.inf
             truth_max = -np.inf
             
+            # Pour le calcul du spatial ACC
+            pred_anomalies = []
+            truth_anomalies = []
+            
             for ds_truth, ds_pred, ds_clim in zip(self.all_datasets_ground_truth, self.all_datasets_predictions, self.all_datasets_climatology):
                 truth = ds_truth[var].values
                 pred = ds_pred[var].values
                 clim = ds_clim[var].values
+                
                 mse_model += np.mean((truth - pred)**2, axis=0)
                 mse_climatology += np.mean((truth - clim)**2, axis=0)
                 truth_min = min(truth_min, np.min(truth))
                 truth_max = max(truth_max, np.max(truth))
+                
+                # Calcul des anomalies pour l'ACC
+                pred_anomaly = (pred - clim).mean(axis=0)
+                truth_anomaly = (truth - clim).mean(axis=0)
+                pred_anomalies.append(pred_anomaly)
+                truth_anomalies.append(truth_anomaly)
             
             mse_model /= len(self.all_datasets_ground_truth)
             mse_climatology /= len(self.all_datasets_ground_truth)
@@ -488,14 +491,25 @@ class Evaluation:
             range_squared = (truth_max - truth_min)**2
             self.spatial_rmse_model[var] = np.sqrt(mse_model) 
             self.spatial_rmse_climatology[var] = np.sqrt(mse_climatology)
+            
+            # Calcul du spatial ACC
+            pred_anomalies = np.array(pred_anomalies)
+            truth_anomalies = np.array(truth_anomalies)
+            
+            numerator = np.mean(pred_anomalies * truth_anomalies, axis=0)
+            denominator = np.sqrt(np.mean(pred_anomalies**2, axis=0) * np.mean(truth_anomalies**2, axis=0))
+            
+            self.spatial_acc[var] = numerator / denominator
 
     def plot_spatial_mse(self):
         for var in self.test_dataset.target_variables:
             lats = [30] + list(self.all_datasets_ground_truth[0].latitude.values) + [45]
             lons = [-10] + list(self.all_datasets_ground_truth[0].longitude.values) + [40]
+            
             def symmetric_limits(data):
                 abs_max = max(abs(data.min()), abs(data.max()))
                 return -abs_max, abs_max
+            
             def pos_limits(data):
                 lim_max = max(data)
                 return 0, lim_max
@@ -505,7 +519,10 @@ class Evaluation:
                 self.spatial_rmse_climatology[var].flatten()
             ]))
 
-                # Fonction pour créer un plot
+            rmse_diff = self.spatial_rmse_model[var] - self.spatial_rmse_climatology[var]
+            vmin_diff, vmax_diff = symmetric_limits(rmse_diff)
+
+            # Fonction pour créer un plot
             def create_plot(data, title, filename, vmin, vmax, label=None, cmap : str = 'RdBu_r'):
                 fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
                 im = ax.imshow(data, cmap=cmap, transform=ccrs.PlateCarree(),
@@ -532,12 +549,14 @@ class Evaluation:
                             bbox_inches='tight', dpi=300)
                 plt.close()
 
-            # Plot Relative MSE
+            # Plot RMSE
             create_plot(self.spatial_rmse_model[var], f'RMSE Model - {var}', f'{var}_spatial_rmse_model.png', vmin_rmse, vmax_rmse, f'RMSE in {self.unity[var]}', 'YlOrRd')
             create_plot(self.spatial_rmse_climatology[var], f'RMSE Climatology - {var}', f'{var}_spatial_rmse_climatology.png', vmin_rmse, vmax_rmse, f'RMSE in {self.unity[var]}', 'YlOrRd')
-            create_plot(self.spatial_rmse_model[var] - self.spatial_rmse_climatology[var], f'Difference RMSE Model - Climatology - {var}', f'{var}_spatial_rmse_diff.png', -3, 3, f'RMSE in {self.unity[var]}', 'RdYlBu')
-
-
+            create_plot(rmse_diff, f'Difference RMSE Model - Climatology - {var}', f'{var}_spatial_rmse_diff.png', vmin_diff, vmax_diff, f'RMSE Difference in {self.unity[var]}', 'RdYlBu')
+            
+            # Plot Spatial ACC
+            create_plot(self.spatial_acc[var], f'Spatial ACC - {var}', f'{var}_spatial_acc.png', -1, 1, 'Spatial ACC', 'RdBu_r')
+                
     def save_mse_to_csv(self):
         df = pd.DataFrame()
         for var in self.test_dataset.target_variables:
@@ -555,7 +574,7 @@ class Evaluation:
         df.loc['mean'] = means
 
         df.to_csv(os.path.join(self.save_folder, 'mse_results.csv'), index=False)
-        
+            
 
     def save_results(self):
        # Créer des listes pour stocker les datasets
@@ -625,22 +644,11 @@ if __name__ == "__main__":
     lead_time = dataset_cfg['temporal_aggregator']['out_len']
 
     data_dirs = dataset_cfg['data_dirs']
-    dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['resolution_output']* lead_time
+    dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['resolution_output']
 
     temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'])
 
     test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory)
-
-    # save the whole dataset to get a climatology for the percentiles
-    all_config = dataset_cfg.copy()
-    all_config['dataset']['relevant_years'] = [1940, 2024]
-
-    data_class =  DatasetEra(all_config, data_dirs, temp_aggregator_factory)
-
-
-    # unscale the data
-    
-
 
     eval = Evaluation(checkpoint_path, config_path, test_dataset)
     print("ready to eval")

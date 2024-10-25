@@ -32,7 +32,7 @@ class AreaDataset:
             scaling_mode (str, optional): _description_. Defaults to None.
         """
         self.area = area
-        self.data = data
+        self.data = data.copy(deep=True)
         self.spatial_resolution = spatial_resolution
         self.temporal_resolution = temporal_resolution
         self.years = years
@@ -48,12 +48,12 @@ class AreaDataset:
 
         # first transform the data to get the right temporal and spatial resolution
         self._preprocess()
+        # select the months needed (winter extended season) so we compute the statistics on winter only
+        self.data = self.data.sel(time=self.data.time.dt.month.isin(self.months))
         # compute the statistics of the class using the scaling years, and the coarse temporal and spatial resolution
         self._compute_statistics()
         # only select the relevant years after computing the statistics to be computed on all the training years
         self.data = self.data.sel(time=self.data.time.dt.year.isin(self.years))
-        # select the months needed (winter extended season)
-        self.data = self.data.sel(time=self.data.time.dt.month.isin(self.months))
         # scale the data 
         self.scaled_data = self.scaling_transform(self.data)
 
@@ -182,14 +182,14 @@ if __name__ == "__main__":
     data = xr.open_dataset(data_path)
 
     temporal_resolution = 7
-    spatial_resolution = 3
+    spatial_resolution = 10
     years = [2005,2007]
-    months = [6,7,8]
+    months = [10,11,12,1,2,3]
     vars = ['tp']
     target = 'tp'
     sum_pr = True
-    is_target = False
-    coarse_t = False
+    is_target = True
+    coarse_t = True
     coarse_s = False
     scaling_years = list(range(1940, 2005 + 1)) # must be the whole
     scaling_mode = 'standardize'
