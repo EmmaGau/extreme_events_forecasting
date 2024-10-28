@@ -11,8 +11,8 @@ import sys
 import argparse
 import time
 from copy import deepcopy
-from model.vae_net import BetaVAE3D  # Import your BetaVAE3D model
-from model.vae_bis import BetaVAE3DLatent
+from model_vae.vae_net import BetaVAE3D  # Import your BetaVAE3D model
+from model_vae.vae_bis import BetaVAE3DLatent
 from copy import deepcopy
 from shutil import copyfile
 # Ajoutez le répertoire parent de 'data' au sys.path
@@ -20,7 +20,6 @@ sys.path.append(os.path.abspath("/home/egauillard/extreme_events_forecasting/ear
 
 # Maintenant vous pouvez importer le module
 from data.dataset import DatasetEra
-from utils.statistics import DataScaler
 from utils.temporal_aggregator import TemporalAggregatorFactory
 
 # Obtenir le chemin absolu du répertoire contenant le script en cours
@@ -134,11 +133,10 @@ class VAE3DLightningModule(pl.LightningModule):
         
         data_dirs = dataset_cfg['data_dirs']
         
-        scaler = DataScaler(dataset_cfg['scaler'])
         temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'])
-        train_dataset = DatasetEra(train_config, data_dirs, temp_aggregator_factory, scaler)
-        val_dataset = DatasetEra(val_config, data_dirs, temp_aggregator_factory, scaler)
-        test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory, scaler)
+        train_dataset = DatasetEra(train_config, data_dirs, temp_aggregator_factory)
+        val_dataset = DatasetEra(val_config, data_dirs, temp_aggregator_factory)
+        test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory)
         print("len train_dataset", len(train_dataset))
         print("len val_dataset", len(val_dataset))
         print("len test_dataset", len(test_dataset))

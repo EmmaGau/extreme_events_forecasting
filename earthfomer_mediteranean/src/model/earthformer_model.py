@@ -19,7 +19,7 @@ from einops import rearrange
 from earthformer.config import cfg
 from earthformer.utils.optim import SequentialLR, warmup_lambda
 from earthformer.utils.utils import get_parameter_names
-from model.cuboid_transformer import CuboidTransformerModel
+from nets.cuboid_transformer import CuboidTransformerModel
 from earthformer.datasets.enso.enso_dataloader import ENSOLightningDataModule, NINO_WINDOW_T
 from copy import deepcopy
 import wandb
@@ -28,7 +28,6 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from data.dataset import DatasetEra
 from torch.utils.data import DataLoader
-from utils.statistics import DataScaler
 from utils.temporal_aggregator import TemporalAggregatorFactory
 import time
 from torchmetrics import R2Score
@@ -327,11 +326,10 @@ class CuboidERAModule(pl.LightningModule):
 
         data_dirs = DATADIRS
         
-        scaler = DataScaler(dataset_cfg['scaler'])
         temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'])
-        train_dataset = DatasetEra(train_config, data_dirs, temp_aggregator_factory, scaler)
-        val_dataset = DatasetEra(val_config, data_dirs, temp_aggregator_factory, scaler)
-        test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory, scaler)
+        train_dataset = DatasetEra(train_config, data_dirs, temp_aggregator_factory)
+        val_dataset = DatasetEra(val_config, data_dirs, temp_aggregator_factory)
+        test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory)
         print("len train_dataset", len(train_dataset))
         print("len val_dataset", len(val_dataset))
         print("len test_dataset", len(test_dataset))

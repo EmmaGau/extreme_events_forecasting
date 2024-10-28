@@ -177,8 +177,8 @@ class BetaVAE3DLatent(nn.Module):
         kld_weight = kwargs['M_N']  # Account for the minibatch samples from the dataset
 
         pred_loss = F.mse_loss(pred, target)
-        extreme_loss = self.custom_extreme_loss(target, pred)
-        pred_loss = 0.5*extreme_loss + 0.5*pred_loss
+        # extreme_loss = self.custom_extreme_loss(target, pred)
+        pred_loss = pred_loss
 
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=[1,2,3]), dim=0)
 

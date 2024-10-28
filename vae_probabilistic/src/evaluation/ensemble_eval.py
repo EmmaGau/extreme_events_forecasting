@@ -15,7 +15,7 @@ class EnsembleEvaluation:
         self.ground_truth = self.transform_data(xr.open_dataset(ground_truth_file)[var])
         self.climatology = self.transform_data(xr.open_dataset(climatology_file)[var])
         self.climatology_std = self.transform_data(xr.open_dataset(climatology_std_file)[var])
-        self.era_entire = xr.open_dataset(entire_era_file)[var] * 1000
+        self.era_entire = xr.open_dataset(entire_era_file)[var]
         self.var = var
         self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
@@ -84,7 +84,7 @@ class EnsembleEvaluation:
 
 
     def _create_climatology_ensemble(self):
-        ensemble_size = 2
+        ensemble_size = 10
         random_samples = xr.DataArray(
             np.random.normal(0, 1, self.climatology.shape + (ensemble_size,)),
             coords=self.climatology.coords,

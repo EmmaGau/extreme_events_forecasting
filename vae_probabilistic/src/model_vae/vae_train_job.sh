@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --gpus=1
 #SBATCH --gpus-per-node=1
-#SBATCH --time=48:00:00
+#SBATCH --time=5:00:00
 #SBATCH --mem-per-cpu=9000
 
 #SBATCH --output=/home/egauillard/extreme_events_forecasting/vae_probabilistic/outputs/output-%j.out
@@ -39,4 +39,4 @@ echo "Python executable: $(which python)"
 
 # Exécutez le script
 python -c "import sys; print(sys.path)"
-python model/vae_model.py --gpus 1
+python model_vae/vae_model.py --gpus 1
