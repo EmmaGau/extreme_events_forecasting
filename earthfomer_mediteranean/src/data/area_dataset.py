@@ -1,35 +1,34 @@
 import xarray as xr
 import os
-from typing import List
-import xarray as xr
 from typing import List, Dict
 import numpy as np
 
 class AreaDataset:
-    def __init__(self, area: str, data: xr.Dataset,coarse_t: bool, coarse_s:bool,
-                 temporal_resolution: Dict[str, int], spatial_resolution: int, years: List[int],
-                 months: List[int], vars: List[str], target: str, sum_pr : bool = False, is_target: bool = False,
+    def __init__(self, area: str, data: xr.Dataset, coarse_t: bool, coarse_s:bool,
+                 temporal_resolution: int, spatial_resolution: int, years: List[int],
+                 months: List[int], vars: List[str], target: List[str], sum_pr : bool = True, is_target: bool = False,
                  scaling_years: List[int] = None, scaling_mode: str = None):
-        """This dataset class takes in input the xr.Dataset of the area (med, tropics or NH) and 
-        preprocesses it to get the right temporal and spatial resolution. It then computes the statistics
-        of the class using the scaling years, and the coarse temporal and spatial resolution. Finally, it scales the data
-        using the statistics computed.
+        """This dataset class takes in inputa specific geograohical area(med, tropics or NH) and its type of data (target or input)
+            This class handles the preprocessing, statistical computation, and scaling of the data for the area.
 
         Args:
-            area (str): _description_
-            data (xr.Dataset): _description_
-            coarse_t (bool): _description_
-            coarse_s (bool): _description_
-            temporal_resolution (Dict[str, int]): _description_
-            spatial_resolution (int): _description_
-            years (List[int]): _description_
-            months (List[int]): _description_
-            vars (List[str]): _description_
-            target (str): _description_
-            sum_pr (bool, optional): _description_. Defaults to False.
-            is_target (bool, optional): _description_. Defaults to False.
-            scaling_years (List[int], optional): _description_. Defaults to None.
-            scaling_mode (str, optional): _description_. Defaults to None.
+            area (str): Name of the area of the dataset (mediteranean, tropics, north_hemisphere, target)
+            data (xr.Dataset): Input xarray Dataset containing climate variables.
+            coarse_t (bool): If True, compute single temporal statistics per grid cell.
+                           If False, compute separate statistics for each day of year.
+            coarse_s (bool): If True, compute single spatial statistics per time point.
+                           If False, compute separate statistics for each grid cell.
+            temporal_resolution (int): Number of days to aggregate for temporal averaging.
+            spatial_resolution (int): Degree spacing for spatial grid coarsening.
+            years (List[int]): List of years to keep in this area dataset 
+            months (List[int]): List of months to keep in this area dataset
+            vars (List[str]): List of variables to keep in this area dataset
+            target (str): Target variables for prediction.
+            sum_pr (bool, optional): If True, sum precipitation when coarsening spatially.
+                                   If False, use mean. Defaults to True.
+            is_target (bool, optional): Whether this dataset is the target. Defaults to False.
+            scaling_years (List[int], optional): Years to use for computing scaling statistics. Defaults to None.
+            scaling_mode (str, optional):  Method for scaling the data. Currently only supports 'standardize'. Defaults to None.
         """
         self.area = area
         self.data = data.copy(deep=True)
@@ -50,7 +49,7 @@ class AreaDataset:
         self._preprocess()
         # select the months needed (winter extended season) so we compute the statistics on winter only
         self.data = self.data.sel(time=self.data.time.dt.month.isin(self.months))
-        # compute the statistics of the class using the scaling years, and the coarse temporal and spatial resolution
+        # compute the statistics of the class using the scaling years
         self._compute_statistics()
         # only select the relevant years after computing the statistics to be computed on all the training years
         self.data = self.data.sel(time=self.data.time.dt.year.isin(self.years))
@@ -134,10 +133,12 @@ class AreaDataset:
 
         # compute the climatology at the same time as the statistics
         self.climatology = {"mean":scaling_data.groupby('time.dayofyear').mean(dim='time'), "std": scaling_data.groupby('time.dayofyear').std(dim='time')}
-        # compute the scaled climatology
+
+        # compute the scaled climatology so we can compare when logging in the wandb metrics, during the training
         self.scaled_climatology = (self.climatology["mean"]- self.statistics["mean"]) / self.statistics["std"]
     
     def save_statistics(self):
+        # not used in the final version
         path_base = f"/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/statistics/"
         path_suffix = f"{min(self.scaling_years)}-{max(self.scaling_years)}_{'-'.join(map(str, self.months))}_{self.get_vars_stats_str()}_{self.area}_{self.spatial_resolution}deg_{self.temporal_resolution}days"
         
@@ -153,7 +154,8 @@ class AreaDataset:
             stat_data.to_netcdf(path)
     
     def scaling_transform(self, data):
-        if self.scaling_mode == 'standardize':
+        """Scale the data"""
+        if self.scaling_mode == 'standardize': #only one scaling mode for now
             if 'dayofyear' in self.statistics["mean"].dims:
                 dayofyear = data.time.dt.dayofyear
                 return (data - self.statistics["mean"].sel(dayofyear=dayofyear)) / self.statistics["std"].sel(dayofyear=dayofyear)
@@ -163,6 +165,7 @@ class AreaDataset:
             raise ValueError(f"Unsupported scaling mode: {self.scaling_mode}")
 
     def inverse_transform(self, data):
+        """Inverse the scaling"""
         if self.scaling_mode == 'standardize':
             if 'dayofyear' in self.statistics["mean"].dims:
                 dayofyear = data.time.dt.dayofyear
@@ -183,10 +186,10 @@ if __name__ == "__main__":
 
     temporal_resolution = 7
     spatial_resolution = 10
-    years = [2005,2007]
+    years = list(range(2005, 2007 + 1)) # must be the whole
     months = [10,11,12,1,2,3]
     vars = ['tp']
-    target = 'tp'
+    target = ['tp']
     sum_pr = True
     is_target = True
     coarse_t = True

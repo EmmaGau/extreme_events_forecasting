@@ -7,19 +7,65 @@ import torch
 from utils.enums import StackType, Resolution
 from typing import List
 
-# à la place faire une rolling mean
-# en gros l'idée c'est d'avoir en parametre le type de stack = [1,7,1:4,30]
-# ca veut dire on lui donne le dernier j, la rolling mean sur les 7 d'avant, les 14 d'avant, les 30 d'avant
-# donc pour créer les données aggrgés on va stacker toutes ces moyennes et s'assurer qu'il nous reste assez de de timepoints
-# pour creer la target 
-# ensuite cela doit preparer la target en fonction du lead time et donner les données aggrégées selon la resolution de l'ouput
-
-# faut faire attention si on saute d'une année à l'autre toujours regarder si on a assez de données pour créer la target
-
 MAPPING_SEASON= {"DJF": 0, "MAM": 1, "JJA": 2, "SON": 3}
 
 class TemporalAggregator:
-    def __init__(self, dataset: xr.Dataset, target: xr.Dataset, clim: xr.Dataset, in_len: int, out_len: int, resolution_input: int, resolution_output: int, gap: int = 1, lead_time_gap: int = 0):
+    def __init__(self, dataset: xr.Dataset, target: xr.Dataset, clim: xr.Dataset, in_len: int, out_len: int,
+                 resolution_input: int, resolution_output: int, gap: int = 1, lead_time_gap: int = 0):
+    """Creates data and target samples and handles temporal aggregation.
+
+        This class processes datasets by grouping them into wet seasons and creating
+        aggregated samples based on specified input/output lengths and resolutions. It has a 
+        date encoding/decoding functionality.
+
+        Parameters
+        ----------
+        dataset : xarray.Dataset
+            Input dataset containing 
+        target : xarray.Dataset
+            Target dataset containing 
+        clim : xarray.Dataset
+            Climate dataset containing dayofyear data
+        in_len : int
+            Number of input time steps
+        out_len : int
+            Number of output time steps
+        resolution_input : int
+            Time step resolution for input data (in days)
+        resolution_output : int
+            Time step resolution for output data (in days)
+        gap : int, optional
+            Gap between consecutive samples (default=1)
+        lead_time_gap : int, optional
+            Gap between input and target data (default=0)
+
+        Attributes
+        ----------
+        wet_season_data : xarray.DatasetGroupBy
+            Dataset grouped by wet seasons
+        wet_season_target : xarray.DatasetGroupBy
+            Target dataset grouped by wet seasons
+        date_encoder : dict
+            Maps date strings to integer indices
+        date_decoder : dict
+            Maps integer indices back to date strings
+
+        Methods
+        -------
+        aggregate(idx: int)
+            Returns aggregated data for a given index including input data,
+            target data, climate data, and temporal information
+        compute_len_dataset()
+            Returns total number of possible samples in the dataset
+        decode_time_indexes(encoded_indexes_array)
+            Converts encoded time indices back to date strings
+
+        Notes
+        -----
+        - Wet seasons are defined starting from September (month 9)
+        - The class ensures proper handling of temporal gaps and resolution differences
+        - Date encoding/decoding is used for efficient temporal referencing
+        """
         self.name = "TemporalAggregator"
         # dataset parameters 
         self.dataset = dataset
@@ -43,47 +89,52 @@ class TemporalAggregator:
         print(f"Wet seasons in target: {list(self.wet_season_target.groups.keys())}")
 
         self._index_mapping = self._create_index_mapping()
-        print(f"Index mapping created with {len(self._index_mapping)} entries.")
 
         self.date_encoder = {}
         self.date_decoder = {}
         self._encode_all_dates()
 
     def _encode_all_dates(self):
+        """ Encodes all dates in the dataset and target into integer indices.
+        """
         all_dates = set(self.dataset.time.values) | set(self.target.time.values)
-        print("All dates combined:", sorted(all_dates))
         for i, date in enumerate(sorted(all_dates)):
             date_str = pd.Timestamp(date).strftime('%Y-%m-%d')
             self.date_encoder[date_str] = i
             self.date_decoder[i] = date_str
-        print("Date encoder:", self.date_encoder)
-        print("Date decoder:", self.date_decoder)
 
     def _encode_date(self, date):
+        """ Encodes a single date into an integer index."""
         date_str = pd.Timestamp(date).strftime('%Y-%m-%d')
         encoded_date = self.date_encoder[date_str]
         print(f"Encoded date {date_str} as {encoded_date}")
         return encoded_date
 
     def _decode_date(self, encoded_date):
+        """ Decodes an integer index into a date string."""
         decoded_date = self.date_decoder[encoded_date]
         print(f"Decoded date {encoded_date} as {decoded_date}")
         return decoded_date
         
     def _group_by_wet_season(self, data):
+        """ Groups data by wet seasons starting from September."""
         self.start_month = 9
         data['wet_season_year'] = data.time.dt.year * (data.time.dt.month >= self.start_month) + (data.time.dt.year - 1) * (data.time.dt.month < self.start_month)
         grouped_data = data.groupby('wet_season_year')
         return grouped_data
 
     def _get_clim_data(self, time_indexes):
+        """ Retrieves climate data for a given set of time indexes."""
         days_of_year = [pd.Timestamp(date).dayofyear for date in time_indexes]
-        print(f"Days of year for climate data: {days_of_year}")
         clim_data = self.clim.sel(dayofyear=days_of_year)
-        print(f"Retrieved climate data for {len(days_of_year)} days.")
         return clim_data
 
     def _create_index_mapping(self):
+        """Map the index of the dataloader to the wet season year and local index in the year.
+
+        Returns:
+            dict: Mapping of dataloader index to wet season year and local index
+        """
         index_mapping = {}
         total_samples = 0
         
@@ -114,7 +165,18 @@ class TemporalAggregator:
         return index_mapping
 
     def aggregate(self, idx: int):
-        # Récupérer la saison humide et l'indice local à partir du mapping
+        """Aggregates temporal data for a specific index, producing input-target pairs.
+
+            For a given index, extracts corresponding time periods from wet season data, processes them
+            according to specified resolutions and gaps, and returns formatted data along with temporal
+            context information.
+
+            Parameters
+            ----------
+            idx : int
+                Index of the sample to aggregate
+        """
+        # Get wet season and local index from mapping
         mapping = self._index_mapping[idx]
         year = mapping['wet_season_year']
         local_idx = mapping['local_idx']
@@ -126,19 +188,14 @@ class TemporalAggregator:
         width_input = self.in_len * self.resolution_input
         width_output = self.out_len * self.resolution_output
 
-        # Récupérer les données d'entrée et de sortie
+        # Get input and output data
         input_time_indexes = wet_season.time.values[local_idx:local_idx + width_input:self.resolution_input]
         target_start_idx = local_idx + width_input + self.lead_time_gap
         target_time_indexes = wet_season_target.time.values[target_start_idx:target_start_idx + width_output:self.resolution_output]
-        print(f"  -> Input time indexes: {input_time_indexes}")
-        print(f"  -> Target time indexes: {target_time_indexes}")
-        print(f"  -> Lead time gap: {self.lead_time_gap} days")
 
-         # Vérifier que le lead_time_gap est correctement appliqué
+        # Verify lead_time_gap is correctly applied
         expected_gap = self.lead_time_gap + self.resolution_input
         actual_gap = (pd.Timestamp(target_time_indexes[0]) - pd.Timestamp(input_time_indexes[-1])).days
-        print(f"  -> Actual gap between input and target: {actual_gap} days")
-        print(f"  -> Expected gap: {expected_gap} days (lead_time_gap + resolution_input)")
         
         if actual_gap != expected_gap:
             print(f"  -> Warning: Actual gap ({actual_gap}) differs from expected gap ({expected_gap})")
@@ -150,7 +207,7 @@ class TemporalAggregator:
         clim_input_data = self._get_clim_data(input_time_indexes)
         clim_target_data = self._get_clim_data(target_time_indexes)
 
-        # Calculer les floats pour la saison et l'année
+        # Calculate season and year floats
         first_time_value = wet_season.time.dt.season.values[local_idx]
         season_float = MAPPING_SEASON[str(first_time_value)] / 4
         first_year = 1940
@@ -158,20 +215,21 @@ class TemporalAggregator:
         year_float = (year - first_year) / (last_year - first_year)
         print(f"  -> Season float: {season_float}, Year float: {year_float}")
 
-        # Encoder les indices temporels
+        # Encode temporal indices
         encoded_input_time_indexes = [self._encode_date(date) for date in input_time_indexes]
         encoded_target_time_indexes = [self._encode_date(date) for date in target_time_indexes]
 
         return input_data, target_data, clim_target_data, season_float, year_float, encoded_input_time_indexes, encoded_target_time_indexes
 
     def compute_len_dataset(self):
+        """ Computes the total number of possible samples in the dataset."""
         dataset_length = len(self._index_mapping)
         print(f"Computed dataset length: {dataset_length}")
         return dataset_length
     
     def decode_time_indexes(self, encoded_indexes_array):
+        """ Decodes a list of encoded time indexes back to date strings."""
         decoded_indexes = [[self._decode_date(int(idx)) for idx in encoded_indexes_array[i]] for i in range(len(encoded_indexes_array))]
-        print(f"Decoded time indexes: {decoded_indexes}")
         return decoded_indexes
 
 class TemporalAggregatorFactory:
@@ -185,7 +243,6 @@ class TemporalAggregatorFactory:
         print(f"Initialized TemporalAggregatorFactory with lead_time_gap: {self.lead_time_gap}")
 
     def create_aggregator(self, dataset : xr.Dataset, target: xr.Dataset, clim: xr.Dataset):
-        
         return TemporalAggregator(
             dataset=dataset,
             target = target,

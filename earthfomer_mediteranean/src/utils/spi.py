@@ -3,6 +3,7 @@ import xarray as xr
 from xclim.core import units
 import argparse 
 import numpy as np
+"""This file is used to compute the SPI transformation for the precipitation data using xclim."""
 
 def spi_transformation(pr_path : str, cal_start_y: str, cal_end_y: str,  window: int = 14):
     cal_start = cal_start_y + "-01-01"
@@ -15,9 +16,8 @@ def spi_transformation(pr_path : str, cal_start_y: str, cal_end_y: str,  window:
     # sort the time index
     pr_data = pr_data.sortby('time')
 
-    # mettre tous les jours 
+    # compute SPI 
     spi_data = xclim.indices.standardized_precipitation_index(pr_data, freq='D', window= window, dist='gamma', method='ML', cal_start=cal_start, cal_end=cal_end)
-    print(spi_data)
     new_path = pr_path.replace("PR", f"SPI_{window}_cal_{cal_start_y}_{cal_end_y}")
     # save 
     spi_data.to_netcdf(new_path)

@@ -1,14 +1,16 @@
 from typing import List, Tuple
+
+import numpy as np
+import pandas as pd
+import torch
 from torch.utils.data import Dataset, DataLoader
 import xarray as xr
-import numpy as np 
-import torch 
+import xclim
+import wandb
+
 from utils.temporal_aggregator import TemporalAggregatorFactory
 from data.area_dataset import AreaDataset
 from utils.enums import StackType, Resolution
-import wandb 
-import xclim
-import pandas as pd
 
 class DatasetEra(Dataset):
     def __init__(
@@ -17,26 +19,37 @@ class DatasetEra(Dataset):
         data_dirs : str,
         temporal_aggr_factory : TemporalAggregatorFactory,
         forecast_day : str = None):
-        """The dataset takes a data_dir mediteranean and data dir North Hemisphere
-            oppens the data dir and reads the data with xarray, only take the 
-            variables specified in the variables list
-            then it remaps the data from mediteranean to North Hemisphere
-            then it takes only the relevant months and years specified in the config
-            uses the temporal aggregator to aggregate the input data 
-            prepare the target data relative to the lead time + output resolution needed 
-            then it scales the data using the scaler specified in the config
-            then it returns the data both NH and MED
+        """A PyTorch Dataset for processing and combining climate data from multiple geographical regions.
+
+        This dataset class loads, preprocesses, and combines climate data from the Mediterranean, Northern Hemisphere, and Tropical regions,
+        using external classes for temporal aggregation and regional processing.
+        It manages region alignment, merging, and provides samples for the DataLoader.
 
         Args:
-            wandb_config (dict): _description_
-            data_dirs (str): _description_
-            temporal_aggregator (TemporalAggregator): _description_
-            scaler (DataScaler, optional): _description_. Defaults to None.
+            wandb_config (dict): Configuration dictionary containing dataset parameters:
+            data_dirs (str):  Dictionary containing paths to data files:
+                {
+                    'mediteranean': {'var_name': 'path_to_file', ...},
+                    'north_hemisphere': {'var_name': 'path_to_file', ...},
+                    'tropics': {'var_name': 'path_to_file', ...}
+                }
+            temporal_aggregator_factory (TemporalAggregatorFactory):Factory for creating temporal aggregators
+            scaler (DataScaler, optional): Specific forecast day to start from. Defaults to None.
+        
+        Notes:
+            The workflow consists of:
+            1. Loading data from multiple regions
+            2. Checking temporal alignment across datasets
+            3. Creating AreaDataset instances for each region
+            4. Remapping Mediterranean and Tropical data to NH grid
+            5. Merging all datasets
+            6. Applying temporal aggregation
+            7. Preparing input/target tensors for training
         """
         self._initialize_config(wandb_config)
         self.data_dirs = data_dirs
         self.aggregator_factory = temporal_aggr_factory
-        self.global_variables = self.variables_med.copy()  # Commencez avec les variables méditerranéennes
+        self.global_variables = self.variables_med.copy() 
 
         if self.variables_nh is not None:
             self.global_variables.extend(self.variables_nh)
@@ -46,12 +59,16 @@ class DatasetEra(Dataset):
         
         self.resolution_input = self.aggregator_factory.resolution_input
         self.resolution_output = self.aggregator_factory.resolution_output
-        self.data, self.target = self._load_and_prepare_data()        
+        self.data, self.target = self._load_and_prepare_data()     
+
+        # Only used for comparing with ECMWF to have overlapping days   
         if forecast_day is not None:
             self.select_for_specific_forecast_day(forecast_day)
-            
+        
+        # need also the scaled climatolgy to compare with predicted values in the logging on wandb
         self.scaled_clim = self.get_scaled_climatology()
 
+        # initialize the aggregator with the preprocessed data
         self.aggregator = self.aggregator_factory.create_aggregator(self.data, self.target, self.scaled_clim)
 
         self.land_sea_mask = self.get_binary_sea_mask()
@@ -77,17 +94,20 @@ class DatasetEra(Dataset):
         self.coarse_s_target = ds_conf.get("coarse_s_target", False)
         self.scaling_mode = wandb_config["scaler"]["mode"]
         
+        # Because name of parameters have changed through the project
         if "coarse" in wandb_config["scaler"].keys():
             self.coarse_t = wandb_config["scaler"]["coarse"]
             self.coarse_t_target = wandb_config["scaler"]["coarse"]
             print(f"Applying {'coarse' if self.coarse_t else 'fine-grained'} temporal scaling for both input and target data.")
             
     def select_for_specific_forecast_day(self, forecast_day):
+        """This function selects only the data from a specific forecast day onward"""
         input_length = self.aggregator_factory.in_len*self.resolution_input + self.aggregator_factory.lead_time_gap
-        # the forecast day need to be shifted by resolution_output because in our dataset dates correspond
-        # to the rolling mean of the resolution_output in the right side of the window
+
+        # Adjust the forecast day by the output resolution to align with the right-anchored rolling mean.
         input_start_date = pd.Timestamp(forecast_day) + pd.Timedelta(days= self.resolution_output) - pd.Timedelta(days=input_length)
         end_date = self.data.time[-1].values
+        
         self.data = self.data.sel(time=slice(input_start_date, end_date))
         self.target = self.target.sel(time=slice(input_start_date, end_date))
 
@@ -96,30 +116,33 @@ class DatasetEra(Dataset):
         ds = xr.open_dataset(dir_path)
         return ds
             
-    def expand_year_range(self,year_range):
+    def expand_year_range(self, year_range):
+        """Expand a year range into a list of years."""
         if len(year_range) != 2:
             raise ValueError("Year range must be specified as [start_year, end_year]")
         start_year, end_year = year_range
         return list(range(start_year, end_year + 1))
 
     def check_dataset(self, reference_dataset, new_dataset, variable_name):
+        """Check if the new dataset is  temporaly and spatially aligned with the reference dataset and adjust if necessary."""
         if reference_dataset is None or len(reference_dataset.data_vars) == 0:
             return reference_dataset, new_dataset
 
         reference_dataset['time'] = reference_dataset.time.dt.floor('D')
         new_dataset['time'] = new_dataset.time.dt.floor('D')
         
-        # Supprime les temps en double s'il y en a
+        # Remove duplicate times
         reference_dataset = reference_dataset.drop_duplicates(dim='time')
         new_dataset = new_dataset.drop_duplicates(dim='time')
-        
+
+        #Align the time dimension
         common_time = np.intersect1d(reference_dataset.time, new_dataset.time)
         if len(common_time) != len(reference_dataset.time) or len(common_time) != len(new_dataset.time):
             print(f"Attention : Décalage temporel pour {variable_name}. Ajustement aux temps communs...")
             reference_dataset = reference_dataset.sel(time=common_time)
             new_dataset = new_dataset.sel(time=common_time)
         
-        # Vérifie et ajuste la latitude et la longitude
+        # Align the spatial dimensions
         for dim in ['latitude', 'longitude']:
             if dim in reference_dataset.dims and dim in new_dataset.dims:
                 common_coords = np.intersect1d(reference_dataset[dim], new_dataset[dim])
@@ -131,25 +154,31 @@ class DatasetEra(Dataset):
         return reference_dataset, new_dataset
 
     def get_scaled_climatology(self):
+        """ Get the scaled climatology for the target class to compute skill scores in the logging."""
         return self.target_class.scaled_climatology
         
     def _load_and_prepare_data(self):
-        """Load data from directories for all variables and create big dataset that contains all variables for both regions
-            and keep the relevant years/months."""
+        """Main function of the class : loads data from directories, preprocess, and merge datasets.
+        Returns:
+            tuple: A pair of xarray.Dataset objects:
+                        - data: Combined and processed input data from all regions
+                        - target: Processed target variables from Mediterranean region
+        """
         med_datasets = []
         nh_datasets = []
         tropics_datasets = []
 
-        # first check that dataset are aligned temporaly and spatially, and merge datasets
+       # Load and align Mediterranean datasets
         for var in self.variables_med:
+            # Align new data with existing datasets temporally and spatially
             med_data = self._load_data(self.data_dirs['mediteranean'][var])
             if med_datasets:
                 med_datasets[0], med_data = self.check_dataset(med_datasets[0], med_data, var)
-                # si y a des nan, print something et replace theme by 0 
             med_datasets.append(med_data)
         
         med_data = xr.merge(med_datasets, compat='override', join='inner')
 
+        # Load and align Northern Hemisphere datasets
         for var in self.variables_nh:
             nh_data = self._load_data(self.data_dirs['north_hemisphere'][var])
             if nh_datasets:
@@ -161,6 +190,7 @@ class DatasetEra(Dataset):
         else:
             nh_data = None
         
+        # Load and align Tropical datasets if specified
         if hasattr(self, 'variables_tropics') and self.variables_tropics:
             for var in self.variables_tropics:
                 tropics_data = self._load_data(self.data_dirs['tropics'][var])
@@ -177,24 +207,35 @@ class DatasetEra(Dataset):
         else:
             tropics_data = None
 
-        # Créer les classes AreaDataset
+        # Create AreaDataset instances for each region
         self.med_class = self._create_area_dataset("mediteranean", med_data, self.variables_med)
         self.target_class = self._create_area_dataset("target", med_data[self.target_variables], self.target_variables, is_target=True)
         self.nh_class = self._create_area_dataset("north_hemisphere", nh_data, self.variables_nh) if nh_data is not None else None
         self.tropics_class = self._create_area_dataset("tropics", tropics_data, self.variables_tropics) if tropics_data is not None else None
         
-
+        # Extract scaled data from each region
         target = self.target_class.scaled_data 
         med_data = self.med_class.scaled_data
         nh_data = self.nh_class.scaled_data if nh_data is not None else None
         tropics_data = self.tropics_class.scaled_data if tropics_data is not None else None
 
-        # Remapping et fusion des données
+        # Combine all regional data into a single dataset
         data = self._remap_and_merge_data(med_data, nh_data, tropics_data)
 
         return data, target
 
     def _create_area_dataset(self, area, data, variables, is_target=False):
+        """ Create an AreaDataset instance for a specific region or for target
+        
+            Args:
+                area (str): Region identifier ('mediteranean', 'north_hemisphere', 'tropics', or 'target')
+                data (xarray.Dataset): Raw data for the region
+                variables (List[str]): Variables to process for this region
+                is_target (bool, optional): Whether this is target data. Defaults to False.
+
+            Returns:
+                AreaDataset: Processed dataset for the region, or None if data is None
+        """
         if data is None:
             return None
         return AreaDataset(
@@ -214,32 +255,50 @@ class DatasetEra(Dataset):
             scaling_mode = self.scaling_mode)
 
     def _remap_and_merge_data(self, med_data, nh_data, tropics_data):
-        # Trouver les temps communs à tous les jeux de données
+        """Remap and merge data from different regions to a common Northern Hemisphere grid.
+
+            Args:
+                med_data (xarray.Dataset): Mediterranean region data
+                nh_data (xarray.Dataset): Northern Hemisphere data
+                tropics_data (xarray.Dataset): Tropical region data
+
+            Returns:
+                xarray.Dataset: Combined dataset on the NH grid with all variables
+
+            Note:
+                The method ensures temporal alignment across all datasets and
+                remaps Mediterranean and Tropical data to the NH grid structure.
+        """
+        # Find common timestamps across all available datasets
         common_times = med_data.time
         if nh_data is not None:
             common_times = np.intersect1d(common_times, nh_data.time)
         if tropics_data is not None:
             common_times = np.intersect1d(common_times, tropics_data.time)
 
-        # Sélectionner seulement les temps communs pour chaque jeu de données
+        # Align all datasets to common timestamps
         med_data = med_data.sel(time=common_times)
         if nh_data is not None:
             nh_data = nh_data.sel(time=common_times)
         if tropics_data is not None:
             tropics_data = tropics_data.sel(time=common_times)
 
+        # Initialize with NH data if available, otherwise use Mediterranean data
         data_list = [nh_data]  if nh_data is not None else [med_data]
 
+        # Remap Mediterranean data to NH grid if NH data is available
         if nh_data is not None:
             remapped_med = self.remap_to_NH(nh_data, med_data)
             data_list.append(remapped_med)
             print("Mediterranean data remapped to NH")
-        
+
+        # Remap Tropical data to NH grid if available
         if tropics_data is not None:
             remapped_tropics = self.remap_to_NH(nh_data, tropics_data)
             data_list.append(remapped_tropics)
             print("Tropical data remapped to NH")
-        
+
+        # Merge all datasets
         data = xr.merge(data_list, compat='override', join='inner')
         return data
 
@@ -304,21 +363,26 @@ class DatasetEra(Dataset):
         return remapped_data
             
     def __len__(self):
+        # With the temporal aggregation, the length of the dataset is computed differently
         len = self.aggregator.compute_len_dataset()
         return len
     
     def get_binary_sea_mask(self):
+        # TODO: not used for now, make it work
+        """Generate a binary land-sea mask from the source mask file."""
         mask = xr.open_dataset(self.mask_path, chunks = None)
         threshold = 0.3
         mask["lsm"] = xr.apply_ufunc(
             lambda x: (x > threshold).astype(int),
             mask["lsm"],
             dask="allowed",  # Si vous utilisez dask, sinon retirez cet argument
-            keep_attrs=True  # Conserver les attributs
+            keep_attrs=True  # Preserve metadata attributes
         )
         return mask["lsm"]
 
     def _prepare_sea_land_target(self, target_data):
+        # TODO: not used for now, make it work
+        """Calculate separate sea and land means for target variables."""
         sea_means = []
         land_means = []
         
@@ -339,6 +403,7 @@ class DatasetEra(Dataset):
         return target_tensor
     
     def _prepare_target(self, target_data):
+        """Prepare target data for training by converting to appropriate tensor format."""
         if self.predict_sea_land:
             target_tensor = self._prepare_sea_land_target(target_data)
         else: 
@@ -347,38 +412,63 @@ class DatasetEra(Dataset):
                 target_list.append(target_data[var].values)
             
             target_data_np = np.transpose(np.array(target_list), (1,2,3,0))
-            target_tensor = torch.tensor(target_data_np)  # size (batch_size, height, width, channels)
+            target_tensor = torch.tensor(target_data_np)  # size (time, height, width, channels)
         return target_tensor
         
     def __getitem__(self, idx):
+        """Implement PyTorch Dataset interface for data loading.
+
+            This method prepares a single batch of data including input features,
+            target variables, and associated metadata.
+
+            Args:
+                idx (int): Index of the sample to retrieve
+
+            Returns:
+                tuple: Contains the following elements:
+                    - input_tensor (torch.Tensor): Input data of shape (time, height, width, channels)
+                    - target_tensor (torch.Tensor): Target data, shape depends on prediction mode
+                    - season_float (float): Season indicator for temporal context
+                    - year_float (float): Year indicator for temporal context
+                    - clim_tensor (torch.Tensor): Climatology data for reference
+                    - input_time_tensor (torch.Tensor): Time indices for input data
+                    - target_time_tensor (torch.Tensor): Time indices for target data
+        """
         input_list = []
         clim_list = []
-        # Aggregate the input data
-        input_aggregated, target_aggregated, clim_target_data, season_float, year_float , input_time_indexes, target_time_indexes = self.aggregator.aggregate(idx)
-       # input data preparation
+        # Get aggregated data from temporal aggregator
+        input_aggregated, target_aggregated, clim_target_data, season_float, year_float, \
+        input_time_indexes, target_time_indexes = self.aggregator.aggregate(idx)
+        
+        # Prepare input data tensors
         for var in self.global_variables:
             input_list.append(input_aggregated[var].values)
         for var in self.target_variables:
             clim_list.append(clim_target_data[var].values)
         
+        # Convert lists to tensors with appropriate shapes
         clim_tensor = torch.tensor(np.transpose(np.array(clim_list), (1,2,3,0)))
-            
         input_data_np = np.transpose(np.array(input_list), (1,2,3,0))
-        input_tensor = torch.tensor(input_data_np)  # size (batch_size, height, width, channels)
-
-        # target preparation
-        target_tensor = self._prepare_target(target_aggregated) # size (batch_size, height, width, channels)
-        # replace nan values by 0
+        input_tensor = torch.tensor(input_data_np)
+        
+        # Prepare target tensor
+        target_tensor = self._prepare_target(target_aggregated)
+        
+        # Handle NaN values
         input_tensor = torch.nan_to_num(input_tensor, nan=0.0)
         target_tensor = torch.nan_to_num(target_tensor, nan=0.0)
+        
+        # Convert time indices to tensors
         input_time_tensor = torch.tensor(input_time_indexes)
         target_time_tensor = torch.tensor(target_time_indexes)
 
-        return input_tensor, target_tensor, season_float, year_float, clim_tensor, input_time_tensor, target_time_tensor
+        return (input_tensor, target_tensor, season_float, year_float, 
+                clim_tensor, input_time_tensor, target_time_tensor)
 
 
     
 if __name__ == "__main__":
+    # debug the dataset
     data_dirs = {'mediteranean': {'tp':"/home/egauillard/data/PR_era5_MED_1degr_19400101_20240229_new.nc",
                                   't2m':"/home/egauillard/data/T2M_era5_MED_1degr_19400101-20240229.nc"},
                  
@@ -426,13 +516,10 @@ if __name__ == "__main__":
     train_dataset = DatasetEra(wandb_config, data_dirs, temp_aggregator_factory)
     print("len dataset", train_dataset.__len__())
 
-    clim_std = train_dataset.target_class.climatology["std"]
-    clim_std.to_netcdf("climatology_std.nc")
-
-
     dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
 
     sample = next(iter(dataloader))
+    print(sample[0].shape)
 
     
 
