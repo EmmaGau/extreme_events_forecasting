@@ -5,6 +5,7 @@ import os
 import sys
 from omegaconf import OmegaConf
 
+ """This file is used to run the evaluation of the model. It will run the deterministic evaluation and the ensemble evaluation."""
 
 sys.path.append(os.path.abspath("/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src"))
 # Maintenant vous pouvez importer le module

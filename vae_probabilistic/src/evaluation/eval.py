@@ -16,23 +16,34 @@ import matplotlib.ticker as mticker
 import random
 import sys
 sys.path.append(os.path.abspath("/home/egauillard/extreme_events_forecasting/vae_probabilistic/src"))
-from model.vae_model import VAE3DLightningModule
+from model_vae.vae_model import VAE3DLightningModule
 # Ajoutez le répertoire parent de 'data' au sys.path
 sys.path.append(os.path.abspath("/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src"))
 # Maintenant vous pouvez importer le module
 from data.dataset import DatasetEra
-from utils.statistics import DataScaler, DataStatistics
-from utils.temporal_aggregator import TemporalAggregatorFactory
+from data.temporal_aggregator import TemporalAggregatorFactory
 
 class Evaluation:
-    def __init__(self, checkpoint_path, config_path, test_dataset, scaler,nb_samples = 50):
+    def __init__(self, checkpoint_path, config_path, test_dataset,nb_samples = 50):
+        """A class for evaluating probabilistic weather predictions using a Variational Autoencoder (VAE) model.
+
+            This class handles the complete evaluation pipeline for VAE-based weather prediction models,
+            including ensemble prediction generation, comparison with ground truth and climatology,
+            and comprehensive visualization of results. The evaluation includes RMSE, R2, skill score, and spatial ACC for
+            ensemble mean prediction.
+
+            It saves the predictions and ground truth in NetCDF files for further analysis (probabilitsic metrics).
+            Refer to evaluation for earthfomer if you want to get more documentation on the evaluation process.
+            Args:
+                checkpoint_path (str): Path to the model checkpoint file
+                config_path (str): Path to the model configuration file
+                test_dataset (DatasetEra): Dataset object containing test data
+                nb_samples (int, optional): Number of ensemble members to generate. Defaults to 50
+        """
+        
         self.checkpoint_path = checkpoint_path
         self.config_path = config_path
         self.test_dataset = test_dataset
-        print(self.test_dataset.relevant_years)
-        print(self.test_dataset.target_class.data)
-        #(TODO) changer scaler et statistics
-        self.scaler = scaler
 
         self.save_folder = self.create_save_folder()
         self.model = None
@@ -44,23 +55,16 @@ class Evaluation:
         self.out_spatial_resolution = test_dataset.out_spatial_resolution
 
         self.target_class = test_dataset.target_class
-        computer = DataStatistics(years = test_dataset.scaling_years, months = test_dataset.relevant_months, coarse_temporal = self.target_class.coarse_t, coarse_spatial = self.target_class.coarse_s)
-        self.statistics = computer._get_stats(test_dataset.target_class)
         self.nb_samples = nb_samples
     
-    def inverse_scaling(self, data):
-        return self.scaler.inverse_transform(data, self.statistics)
-
     def create_save_folder(self):
-        checkpoint_dir, checkpoint_id = os.path.split(self.checkpoint_path)
-
         checkpoint_dir, checkpoint_id = os.path.split(self.checkpoint_path)
         exp_dir = checkpoint_dir.split('/checkpoints')[0]
         if '/checkpoints' in exp_dir:
             exp_dir = exp_dir.rsplit('/checkpoints', 1)[0]
         print(f"Checkpoints found in path. Experiment directory: {exp_dir}")
 
-                save_folder = os.path.join(exp_dir, 'inference_plots', checkpoint_id)
+        save_folder = os.path.join(exp_dir, 'inference_plots', checkpoint_id)
         os.makedirs(save_folder, exist_ok=True)
         print(f"Save folder created at: {save_folder}")
         return save_folder
@@ -96,7 +100,7 @@ class Evaluation:
         )
         with torch.no_grad():
             for batch in tqdm(test_dataloader, desc="Processing batches"):
-                input_data, target_data, season_float, clim_target, year_float, input_time_indexes, target_time_indexes = batch
+                input_data, target_data, season_float,  year_float, clim_target,input_time_indexes, target_time_indexes = batch
                 
                 input_data = input_data.to(self.device)
                 target_data = target_data.to(self.device)
@@ -120,8 +124,8 @@ class Evaluation:
         self.all_target_time_indexes = np.concatenate(self.all_target_time_indexes, axis=0)
 
         # Calculate climatology
-        self.climatology_mean = self.test_dataset.compute_climatology()["mean"]
-        self.climatology_std = self.test_dataset.compute_climatology()["std"]
+        self.climatology_mean= self.target_class.climatology["mean"]
+        self.climatology_std = self.target_class.climatology["std"]
 
     def create_data_arrays(self):
         target_data = self.test_dataset.target_class.data
@@ -183,15 +187,8 @@ class Evaluation:
             ds_climatology_std = xr.Dataset(data_vars_climatology_std, coords={k: v for k, v in coords.items() if k != 'ensemble'})
 
             # Apply inverse scaling
-            ds_ensemble = self.inverse_scaling(ds_ensemble)
-            ds_ground_truth = self.inverse_scaling(ds_ground_truth)
-
-            # Multiply by 1000 for precipitation
-            if "tp" in self.test_dataset.target_variables:
-                ds_ensemble["tp"] *= 1000
-                ds_ground_truth["tp"] *= 1000
-                ds_climatology["tp"] *= 1000
-                ds_climatology_std["tp"] *= 1000
+            ds_ensemble = self.target_class.inverse_transform(ds_ensemble)
+            ds_ground_truth = self.target_class.inverse_transform(ds_ground_truth)
 
             self.all_datasets_ensemble.append(ds_ensemble)
             self.all_datasets_ground_truth.append(ds_ground_truth)
@@ -339,9 +336,6 @@ class Evaluation:
                 self.r2_model[var].append(r2_model)
                 self.r2_climatology[var].append(r2_clim)
 
-        # Transformer tous les RMSE par cellule de grille
-        # self.rmse_climatology = {key: [v / self.out_spatial_resolution for v in value] for key, value in self.rmse_climatology.items()}
-        # self.rmse_model = {key: [v / self.out_spatial_resolution for v in value] for key, value in self.rmse_model.items()}
         
     def plot_mse_curves(self):
         for var in self.test_dataset.target_variables:
@@ -410,6 +404,11 @@ class Evaluation:
         self.spatial_rmse_model = {}
         self.spatial_mse_climatology = {}
         self.spatial_rmse_climatology = {}
+        self.spatial_acc = {}
+
+        # Pour le calcul du spatial ACC
+        pred_anomalies = []
+        truth_anomalies = []
         
         for var in self.test_dataset.target_variables:
             mse_model = np.zeros_like(self.all_datasets_ground_truth[0][var].isel(time=0).values)
@@ -421,23 +420,49 @@ class Evaluation:
                 truth = ds_truth[var].values
                 pred_ensemble = ds_pred[var].values
                 clim = ds_clim[var].values
+                ensemble_mean = ds_pred[var].mean('ensemble').values
+                
+                # Calcul des anomalies par rapport à la climatologie
+                pred_anomaly = ensemble_mean - clim
+                truth_anomaly = truth - clim
 
-                # do the mean over the time steps 
-                mse_ensemble = np.mean((truth[np.newaxis,: ,: ,:] - pred_ensemble)**2, axis=(1))
                 
                 # Prendre la moyenne des MSE de l'ensemble
-                mse_model += np.mean(mse_ensemble, axis=0)
+                mse_model +=  np.mean((truth - ensemble_mean)**2, axis=0)
                 mse_climatology += np.mean((truth - clim)**2, axis=0)
                 truth_min = min(truth_min, np.min(truth))
                 truth_max = max(truth_max, np.max(truth))
+                
+                # Stocker les anomalies
+                pred_anomalies.append(pred_anomaly)
+                truth_anomalies.append(truth_anomaly)
             
+            # Calculer la moyenne finale des MSE
             mse_model /= len(self.all_datasets_ground_truth)
             mse_climatology /= len(self.all_datasets_ground_truth)
+            
             self.spatial_mse_model[var] = mse_model
             self.spatial_mse_climatology[var] = mse_climatology
             range_squared = (truth_max - truth_min)**2
+            
+            # Calcul du RMSE
             self.spatial_rmse_model[var] = np.sqrt(mse_model)
             self.spatial_rmse_climatology[var] = np.sqrt(mse_climatology)
+            
+            # Calcul du spatial ACC
+            pred_anomalies = np.array(pred_anomalies)
+            truth_anomalies = np.array(truth_anomalies)
+            
+            # Moyenne des anomalies sur les échantillons
+            pred_anomalies_mean = np.mean(pred_anomalies, axis=0)
+            truth_anomalies_mean = np.mean(truth_anomalies, axis=0)
+            
+            numerator = np.mean(pred_anomalies_mean * truth_anomalies_mean, axis=0) # shape (lat, lon)
+            denominator = np.sqrt(np.mean(pred_anomalies_mean**2, axis=0) * np.mean(truth_anomalies_mean**2, axis=0)) #shape lat lon
+
+            self.spatial_acc[var] = numerator / denominator
+            
+
 
     def plot_spatial_mse(self):
         for var in self.test_dataset.target_variables:
@@ -454,6 +479,10 @@ class Evaluation:
                 self.spatial_rmse_model[var].flatten(),
                 self.spatial_rmse_climatology[var].flatten()
             ]))
+
+
+            rmse_diff = self.spatial_rmse_model[var] - self.spatial_rmse_climatology[var]
+            vmin_diff, vmax_diff = symmetric_limits(rmse_diff)
 
                 # Fonction pour créer un plot
             def create_plot(data, title, filename, vmin, vmax, label=None, cmap : str = 'RdBu_r'):
@@ -485,7 +514,10 @@ class Evaluation:
             # Plot Relative MSE
             create_plot(self.spatial_rmse_model[var], f'RMSE average ensemble Model - {var}', f'{var}_spatial_rmse_model.png', vmin_rmse, vmax_rmse, f'RMSE in {self.unity[var]}', 'YlOrRd')
             create_plot(self.spatial_rmse_climatology[var], f'RMSE Climatology - {var}', f'{var}_spatial_rmse_climatology.png', vmin_rmse, vmax_rmse, f'RMSE in {self.unity[var]}', 'YlOrRd')
-            create_plot(self.spatial_rmse_model[var] - self.spatial_rmse_climatology[var], f'Difference RMSE Ensemble Model - Climatology - {var}', f'{var}_spatial_rmse_diff.png', -3, 3, f'RMSE in {self.unity[var]}', 'RdYlBu')
+            create_plot(self.spatial_rmse_model[var] - self.spatial_rmse_climatology[var], f'Difference RMSE Ensemble Model - Climatology - {var}', f'{var}_spatial_rmse_diff.png', vmin_diff, vmax_diff, f'RMSE in {self.unity[var]}', 'RdYlBu')
+            # Plot Spatial ACC
+            create_plot(self.spatial_acc[var], f'Spatial ACC - {var}', f'{var}_spatial_acc.png', -1, 1, 'Spatial ACC', 'RdBu_r')
+                
 
     def save_mse_to_csv(self):
         df = pd.DataFrame()
@@ -516,7 +548,6 @@ class Evaluation:
         dic['truth'] = os.path.join(self.save_folder, 'all_ground_truths.nc')
         dic['climatology'] = os.path.join(self.save_folder, 'all_climatology.nc')
         dic['climatology_std'] = os.path.join(self.save_folder, 'all_climatology_std.nc')
-        dic["truth_era"] = os.path.join(exp_dir, '1940_2024_target.nc')
         dic["save_folder"] = self.save_folder
         return dic 
 
@@ -577,7 +608,7 @@ if __name__ == "__main__":
     # parser.add_argument('--checkpoint_path', type=str, required=True)
     # args = parser.parse_args()
     # checkpoint_path = args.checkpoint_path
-    checkpoint_path = "/home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20240925_112910/checkpoints/epoch=19-val_prediction_loss=0.79-val_kld_loss=0.24.ckpt"
+    checkpoint_path = "/home/egauillard/extreme_events_forecasting/vae_probabilistic/experiments/VAE_20241013_185806_tp_fine_s_3Dlatent_in6_month9/checkpoints/epoch=84-val_prediction_loss=1.07-val_kld_loss=0.03.ckpt"
 
     exp_dir = checkpoint_path.split('/checkpoints/')[0]
     print(f"Experiment directory: {exp_dir}")
@@ -590,23 +621,15 @@ if __name__ == "__main__":
     lead_time = dataset_cfg['temporal_aggregator']['out_len']
 
     data_dirs = dataset_cfg['data_dirs']
-    scaler = DataScaler(dataset_cfg['scaler'])
-    dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['resolution_output']* lead_time
+    dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['resolution_output']
 
     temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'])
 
-    test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory, scaler)
-
-    # save the whole dataset to get a climatology for the percentiles
-    all_config = dataset_cfg.copy()
-    all_config['dataset']['relevant_years'] = [1940, 2024]
-
-    dataset =  DatasetEra(all_config, data_dirs, temp_aggregator_factory, scaler)
-    target_class = dataset.reverse_scaling(dataset.target_class).to_netcdf(os.path.join(exp_dir, '1940_2024_target.nc'))
+    test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory)
 
     # unscale the data
 
-    eval = Evaluation(checkpoint_path, config_path, test_dataset, scaler)
+    eval = Evaluation(checkpoint_path, config_path, test_dataset)
     print("ready to eval")
     eval.run_evaluation()
 
