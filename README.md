@@ -23,9 +23,11 @@ The strong correlations of winter precipitation anomalies in the **Alps and the 
 
 #### Comparison with ECMWF
 
-To assess overall performance, we compared the probabilistic metrics of the two models with the ECMWF S2S forecast. As a main result, this comparison showed that our two models have **superior skill at lead times of 14-21 days** and demonstrated **higher predictability for specific regions**, particularly the Eastern Mediterranean, compared to ECMWF.
+To assess overall performance, we compared the probabilistic metrics of the two models with the ECMWF S2S forecast. As a main result, this comparison showed that our two models have **superior skill at lead times of 14-21 days**, as we can observe on the figure below showing **RPSS relative to Climatology Mean**.
 
-![image_name](images/rmse.png)
+![RPSS against Climatology mean, over lead time](images/rpss_climatology_mean.png)
+
+It also demonstrated **higher predictability for specific regions**, particularly the Eastern Mediterranean, compared to ECMWF.
 
 ![image_name](images/rpss_difference_maps_compact.png)
 ## II- Repo stucture
