@@ -16,18 +16,51 @@ The project aims to develop two distinct models to generate probabilistic foreca
 
 ## II- Repo stucture
 This repository is structured in 2 main codebase : Earthformer and VAE 
-
+### a. Earthformer
 
 
 
 ```
+📦 src
+ ┣ 📂 configs
+ ┣ 📂 data
+ ┃ ┣ 📜 area_dataset.py
+ ┃ ┣ 📜 dataset.py
+ ┃ ┗ 📜 temporal_aggregator.py
+ ┣ 📂 evaluation
+ ┃ ┣ 📜 ensemble_eval.py
+ ┃ ┗ 📜 test.py
+ ┣ 📂 interpretability
+ ┣ 📂 model
+ ┃ ┣ 📂 experiments
+ ┃ ┣ 📜 earthformer_model.py
+ ┃ ┣ 📜 earthformer_prob_model.py
+ ┣ 📂 nets
+ ┃ ┗ 📜 cuboid_transformer.py
+ ┣ 📂 s2s_evaluation
+ ┗ 📂 utils
+   ┣ 📜 __init__.py
+   ┣ 📜 climatology.py
+   ┣ 📜 entire_era.py
+   ┣ 📜 enums.py
+   ┣ 📜 hierarchical_aggregator.py
+   ┣ 📜 spi.py
+ ```
+
+### b. VAE
+```
 📦src
  ┣ 📂data
- ┃ ┣ 📜mediteranean_dataset.py
- ┃ ┗ 📜north_h_dataset.py
- ┣ 📂evaluation
- ┣ 📂model
- ┗ 📂utils
+ ┃  ┣ 📜 __init__.py
+ ┃  ┣ 📜 ensemble_eval.py
+ ┃  ┣ 📜 eval.py
+ ┃  ┗ 📜 main.py
+ ┣ 📂 model_vae
+ ┃ ┣ 📜 __init__.py
+ ┃ ┣ 📜 vae_bis.py         # Alternative VAE implementation/variant
+ ┃ ┣ 📜 vae_model.py       # Core VAE model definition
+ ┃ ┣ 📜 vae_net.py         # Neural network architecture for VAE
+ ┃ ┗ 📜 vae_train_job.sh   # Training script for VAE
  ```
 
 
