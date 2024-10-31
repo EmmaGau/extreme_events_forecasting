@@ -6,6 +6,8 @@ import numpy as np
 import torch
 torch.set_default_tensor_type(torch.FloatTensor)
 
+""" This script contains the implementation of a 3D Variational Autoencoder (VAE) with a 1D latent space."""
+
 class Encoder(nn.Module):
     def __init__(self, in_channels, hidden_dims, latent_dim, input_dims, layout="THWC", use_attention=False, num_heads=8):
         super(Encoder, self).__init__()
@@ -49,7 +51,6 @@ class Encoder(nn.Module):
     def calculate_encoder_output_dims(self, input_dims, num_layers):
         t, h, w = input_dims
         for i in range(num_layers):
-            # Changement ici : on réduit t deux fois au lieu d'une
             if i >= num_layers - 1:
                 w = (w - 1) // 4 + 1
                 h = (h - 1) // 2 + 1
@@ -165,8 +166,6 @@ class Decoder(nn.Module):
 
         return result
 
-# The rest of the BetaVAE3D class remains the same
-
 
 class BetaVAE3D(nn.Module):
     def __init__(self,
@@ -228,10 +227,9 @@ class BetaVAE3D(nn.Module):
         print('target and pred shape')
         print(pred.shape, target.shape)
 
-        
-
+        # Compute the prediction loss
         pred_loss = F.mse_loss(pred, target)
-
+        # Compute the KLD loss
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1), dim=0)
 
         if self.loss_type == 'H':

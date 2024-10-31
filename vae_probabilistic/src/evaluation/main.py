@@ -9,8 +9,7 @@ from omegaconf import OmegaConf
 sys.path.append(os.path.abspath("/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src"))
 # Maintenant vous pouvez importer le module
 from data.dataset import DatasetEra
-from utils.statistics import DataScaler, DataStatistics
-from utils.temporal_aggregator import TemporalAggregatorFactory
+from data.temporal_aggregator import TemporalAggregatorFactory
 
 def main(checkpoint_path):
     exp_dir = checkpoint_path.split('/checkpoints/')[0]
@@ -23,27 +22,25 @@ def main(checkpoint_path):
     # use exactly the same parameters for the training but change the relevant years
     test_config['dataset']['relevant_years'] = [2016, 2024]
     lead_time = dataset_cfg['temporal_aggregator']['out_len']
+    spatial_out_res = test_config['dataset']['out_spatial_resolution']
+    temporal_out_res = dataset_cfg['temporal_aggregator']['resolution_output']
 
     data_dirs = dataset_cfg['data_dirs']
-    scaler = DataScaler(dataset_cfg['scaler'])
 
     # do not overlap the samples of the test set 
-    dataset_cfg['temporal_aggregator']['gap'] = dataset_cfg['temporal_aggregator']['resolution_output']* lead_time
+    dataset_cfg['temporal_aggregator']['gap'] = temporal_out_res * lead_time
     temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'])
 
-    test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory, scaler)
+    test_dataset = DatasetEra(test_config, data_dirs, temp_aggregator_factory)
 
     # save the whole dataset to get a climatology for the percentiles to compute RPSS 
-    all_config = dataset_cfg.copy()
-    all_config['dataset']['relevant_years'] = [1940, 2024]
-    dataset =  DatasetEra(all_config, data_dirs, temp_aggregator_factory, scaler)
-    target_class = dataset.reverse_scaling(dataset.target_class).to_netcdf(os.path.join(exp_dir, '1940_2024_target.nc'))
 
     # run inference and deterministic plots
-    eval = Evaluation(checkpoint_path, config_path, test_dataset, scaler)
+    eval = Evaluation(checkpoint_path, config_path, test_dataset)
     eval.run_evaluation()
 
     path_dic = eval.get_save_paths()
+    path_dic["truth_era"] = f"/home/egauillard/data/tp_1940_2023_{spatial_out_res}deg_{temporal_out_res}res_winter.nc"
 
     # run ensemble evaluation
     evaluator = EnsembleEvaluation(path_dic["ensemble_pred"], path_dic["truth"], path_dic["climatology"], path_dic["climatology_std"], path_dic["truth_era"], "tp", path_dic["save_folder"])

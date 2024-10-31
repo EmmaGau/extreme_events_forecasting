@@ -15,23 +15,35 @@ from model_vae.vae_net import BetaVAE3D  # Import your BetaVAE3D model
 from model_vae.vae_bis import BetaVAE3DLatent
 from copy import deepcopy
 from shutil import copyfile
-# Ajoutez le répertoire parent de 'data' au sys.path
+
+# add the src directory to the path
 sys.path.append(os.path.abspath("/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src"))
 
-# Maintenant vous pouvez importer le module
 from data.dataset import DatasetEra
-from utils.temporal_aggregator import TemporalAggregatorFactory
+from data.temporal_aggregator import TemporalAggregatorFactory
 
-# Obtenir le chemin absolu du répertoire contenant le script en cours
+# Create the experiments directory
 _curr_dir = os.path.realpath(os.path.dirname(os.path.realpath(__file__)))
 _parent_dir = os.path.dirname(os.path.dirname(_curr_dir))
-
 exps_dir = os.path.join(_parent_dir, 'experiments')
-
 os.makedirs(exps_dir, exist_ok=True)
 
 class VAE3DLightningModule(pl.LightningModule):
     def __init__(self, config_file_path, save_dir, input_dims, output_dims):
+        """A PyTorch Lightning Module for training a 3D Variational Autoencoder (VAE) with 
+            model-specific configurations loaded from a YAML configuration file.
+
+            This module supports two types of VAE models: BetaVAE3D and BetaVAE3DLatent, 
+            allowing for configurable latent dimensions, hidden layers, and attention mechanisms. 
+            It includes methods for training, validation, and testing steps, along with logging 
+            metrics such as skill score and loss components (prediction loss and KLD loss).
+
+            Args:
+                config_file_path (str): Path to the YAML configuration file.
+                save_dir (str): Directory to save checkpoints, logs, and configurations.
+                input_dims (tuple): Dimensions of the input data.
+                output_dims (tuple): Dimensions of the output data.
+        """
         super().__init__()
         oc = OmegaConf.load(open(config_file_path))
         self.config = OmegaConf.to_object(oc)
@@ -122,7 +134,13 @@ class VAE3DLightningModule(pl.LightningModule):
 
     @staticmethod
     def get_dataloaders(dataset_cfg: dict,batch_size: int, val_years: list, test_years: list):
-        
+         """Creates and returns data loaders for training, validation, and testing datasets 
+            based on the provided configuration.
+
+            This method initializes datasets with specified configurations for relevant 
+            years, creates a temporal aggregator, and constructs data loaders for each 
+            dataset with specified batch size and data shuffling options.
+        """
         train_config = deepcopy(dataset_cfg)
         val_config = deepcopy(dataset_cfg)
         test_config = deepcopy(dataset_cfg)
@@ -151,7 +169,6 @@ class VAE3DLightningModule(pl.LightningModule):
         return self.model(input,target)
 
     def training_step(self, batch, batch_idx):
-        print(batch)
         input, target, season_float, year_float, clim_tensor, *_ = batch
         pred, target, mu, log_var = self(input, target)
         loss_dict = self.model.loss_function(pred,target, mu, log_var, M_N=1.0)
@@ -200,7 +217,6 @@ class VAE3DLightningModule(pl.LightningModule):
         skill_score = 1 - (loss_dict['prediction_Loss']/mse_clim)
         self.log('test_skill_score', skill_score, on_step=False, on_epoch=True, logger=True)
         return loss
-
 
     # TODO : configure save hyperparameters change the decay paramrenters 
     def configure_optimizers(self):

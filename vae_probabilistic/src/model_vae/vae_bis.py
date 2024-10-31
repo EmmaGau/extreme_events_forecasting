@@ -4,6 +4,10 @@ from torch.nn import functional as F
 import numpy as np
 from typing import List, Tuple
 
+""" This script contains the implementation of a 3D Variational Autoencoder (VAE) with a 3D latent space. With the possibility to
+    have extreme loss in the loss function. The model is implemented using PyTorch. The model is composed of an Encoder3D and a
+    Decoder3D."""
+
 class Encoder3D(nn.Module):
     def __init__(self, in_channels, hidden_dims, latent_dims, input_dims, layout="THWC"):
         super(Encoder3D, self).__init__()
@@ -177,6 +181,7 @@ class BetaVAE3DLatent(nn.Module):
         kld_weight = kwargs['M_N']  # Account for the minibatch samples from the dataset
 
         pred_loss = F.mse_loss(pred, target)
+        # extreme loss function
         # extreme_loss = self.custom_extreme_loss(target, pred)
         pred_loss = pred_loss
 
