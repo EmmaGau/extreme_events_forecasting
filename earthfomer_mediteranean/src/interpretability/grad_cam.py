@@ -3,12 +3,12 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 from pytorch_lightning import Trainer
-from earthformer_model import CuboidERAModule
+from model.earthformer_model import CuboidERAModule
 from omegaconf import OmegaConf
 import os 
 from torch.utils.data import DataLoader
 from utils.statistics import DataScaler
-from utils.temporal_aggregator import TemporalAggregatorFactory
+from data.temporal_aggregator import TemporalAggregatorFactory
 from data.dataset import DatasetEra
 
 VAL_YEARS = [2006,2015]

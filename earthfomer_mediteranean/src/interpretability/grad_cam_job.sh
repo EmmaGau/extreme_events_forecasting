@@ -39,4 +39,4 @@ echo "Python executable: $(which python)"
 
 # Exécutez le script
 python -c "import sys; print(sys.path)"
-python model/grad_cam_bis.py --gpus 1
+python interpretability/grad_cam_bis.py --gpus 1

@@ -4,12 +4,11 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 from pytorch_lightning import Trainer
-from earthformer_model import CuboidERAModule
+from model.earthformer_model import CuboidERAModule
 from omegaconf import OmegaConf
 import os 
 from torch.utils.data import DataLoader
-from utils.statistics import DataScaler
-from utils.temporal_aggregator import TemporalAggregatorFactory
+from data.temporal_aggregator import TemporalAggregatorFactory
 from data.dataset import DatasetEra
 
 
@@ -26,7 +25,7 @@ def reshape_transform(tensor, height=14, width=14):
 
 if __name__ == "__main__":
     # Charger le module et la configuration
-    checkpoint_path = "/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20240913_172122_every_coarse_lead_time_20_14/checkpoints/skill/model-skill-epoch=028-valid_skill_score=0.01.ckpt"
+    checkpoint_path = "/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/model/experiments/earthformer_era_20241010_113122/checkpoints/loss/model-loss-epoch=004_valid_loss_epoch=1.10.ckpt"
     exp_dir = checkpoint_path.split('/checkpoints/')[0]
     print(f"Experiment directory: {exp_dir}")
     config_path = os.path.join(exp_dir, 'cfg.yaml')
@@ -37,10 +36,9 @@ if __name__ == "__main__":
     micro_batch_size = oc_from_file.optim.micro_batch_size
 
     # Obtenir un batch de données
-    scaler = DataScaler(dataset_cfg['scaler'])
     data_dirs = dataset_cfg['data_dirs']
     temp_aggregator_factory = TemporalAggregatorFactory(dataset_cfg['temporal_aggregator'])
-    test_dataset = DatasetEra(dataset_cfg, data_dirs , temp_aggregator_factory, scaler)
+    test_dataset = DatasetEra(dataset_cfg, data_dirs , temp_aggregator_factory)
     test_dl = DataLoader(test_dataset, batch_size=2, shuffle=False, num_workers=4, pin_memory=True)
     batch = next(iter(test_dl))
     input_shape = batch[0].shape[1:]
