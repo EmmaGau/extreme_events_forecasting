@@ -12,7 +12,7 @@ sys.path.append(os.path.abspath("/home/egauillard/extreme_events_forecasting/ear
 
 # Maintenant vous pouvez importer le module
 from data.dataset import DatasetEra
-from utils.temporal_aggregator import TemporalAggregatorFactory
+from data.temporal_aggregator import TemporalAggregatorFactory
 
 import wandb 
 import xclim
