@@ -8,7 +8,7 @@ import xarray as xr
 import xclim
 import wandb
 
-from utils.temporal_aggregator import TemporalAggregatorFactory
+from data.temporal_aggregator import TemporalAggregatorFactory
 from data.area_dataset import AreaDataset
 from utils.enums import StackType, Resolution
 
