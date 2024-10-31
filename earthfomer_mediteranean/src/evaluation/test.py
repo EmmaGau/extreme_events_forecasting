@@ -1,26 +1,42 @@
 import os
-import torch
+import random
+import argparse
+
 import numpy as np
-import xarray as xr
 import pandas as pd
-import matplotlib.pyplot as plt
+import torch
+import xarray as xr
+
+from sklearn.metrics import mean_squared_error, r2_score
 from tqdm import tqdm
 from omegaconf import OmegaConf
-import cartopy.crs as ccrs
-from sklearn.metrics import mean_squared_error, r2_score
-from  model.earthformer_model import CuboidERAModule
-from utils.temporal_aggregator import TemporalAggregatorFactory
-import argparse 
-from data.dataset import DatasetEra
+
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
-import matplotlib.ticker as mticker
-import random
 
+from model.earthformer_model import CuboidERAModule
+from data.temporal_aggregator import TemporalAggregatorFactory
+from data.dataset import DatasetEra
 
 class Evaluation:
     def __init__(self, checkpoint_path, config_path, test_dataset):
+        """A class for evaluating earthformer model against ground truth and climatological baselines.
+
+            This class handles the complete deterministic evaluation pipeline, including:
+            - Loading model checkpoints
+            - Running inference
+            - Computing various error metrics (MSE, RMSE, R2, skill scores)
+            - Generating visualizations
+            - Saving results
+
+        Args:
+            checkpoint_path (str): Path to the model checkpoint file
+            config_path (str): Path to the model configuration file
+            test_dataset (DatasetEra): Dataset object containing test data
+        """
         self.checkpoint_path = checkpoint_path
         self.config_path = config_path
         self.test_dataset = test_dataset
@@ -39,6 +55,8 @@ class Evaluation:
     
 
     def create_save_folder(self):
+        """ Save 'inference_plots' folder in the model experiment directory
+        """
         checkpoint_dir, checkpoint_id = os.path.split(self.checkpoint_path)
         exp_dir = checkpoint_dir.split('/checkpoints')[0]
         if '/checkpoints' in exp_dir:
@@ -52,6 +70,7 @@ class Evaluation:
 
 
     def load_model(self):
+        """Loads model checkpoint and configuration file"""
         oc = OmegaConf.load(self.config_path)
         sample = next(iter(self.test_dataset))
         input_shape = list(sample[0].shape)
@@ -71,6 +90,7 @@ class Evaluation:
         self.config = oc
 
     def run_inference(self):
+        """Runs inference on the test dataset and saves the predictions, ground truth and climatology"""
         all_predictions = []
         all_ground_truth = []
         all_inputs = []
@@ -107,6 +127,7 @@ class Evaluation:
         self.all_ground_truth = np.concatenate(all_ground_truth, axis=0)
         self.all_input_time_indexes = np.concatenate(all_input_time_indexes, axis=0)
         self.all_target_time_indexes = np.concatenate(all_target_time_indexes, axis=0)
+        # clim_test was to check if it coincides wth the climatology mean
         self.clim_test = np.concatenate(clim_test, axis=0)
 
         # Calculate climatology
@@ -115,6 +136,15 @@ class Evaluation:
 
 
     def create_data_arrays(self):
+        """Creates xarray DataArrays and Datasets from model predictions, ground truth, and climatology data.
+            
+            This method processes the raw numpy arrays from model outputs and converts them into xarray
+            data structures with proper coordinates (time, latitude, longitude) and dimensions. It handles:
+            - Model predictions
+            - Ground truth values
+            - Climatology means and standard deviations
+            - Test climatology data
+        """
         target_data = self.test_dataset.target_class.data
         lat_coords = target_data.latitude.values
         lon_coords = target_data.longitude.values
@@ -122,12 +152,13 @@ class Evaluation:
         self.all_datasets_predictions = []
         self.all_datasets_ground_truth = []
         self.all_datasets_climatology = []
-        self.all_datasets_clim_test = []  # Nouvelle liste pour clim_test
+        self.all_datasets_clim_test = []  
         self.all_datasets_climatology = []
         self.all_datasets_climatology_std = []
 
+        # sample is one dataloader sample
         for sample in range(self.all_predictions.shape[0]):
-            # Convertir les time_indexes en objets datetime pour cet échantillon
+            # Convert time indexes to datetime objects
             time_coords = pd.to_datetime(self.all_target_time_indexes[sample])
 
             coords = {
@@ -139,7 +170,7 @@ class Evaluation:
             data_vars_predictions = {}
             data_vars_ground_truth = {}
             data_vars_climatology = {}
-            data_vars_clim_test = {}  # Nouveau dictionnaire pour clim_test
+            data_vars_clim_test = {}  
             data_vars_climatology_std = {}
 
             for i, var in enumerate(self.test_dataset.target_variables):
@@ -153,59 +184,48 @@ class Evaluation:
                     coords=coords,
                     dims=['time', 'latitude', 'longitude']
                 )
-                data_vars_clim_test[var] = xr.DataArray(  # Nouvelle DataArray pour clim_test
+                data_vars_clim_test[var] = xr.DataArray(  
                     self.clim_test[sample, :, :, :, i],
                     coords=coords,
                     dims=['time', 'latitude', 'longitude']
                 )
 
             climatology_data = np.zeros_like(self.all_predictions[sample, :, :, :, i])
-            climatology_std_data = np.zeros_like(self.all_predictions[sample, :, :, :, i])  # Ajoutez cette ligne
+            climatology_std_data = np.zeros_like(self.all_predictions[sample, :, :, :, i])  
             for t, time in enumerate(time_coords):
                 climatology_data[t, :, :] = self.climatology_mean[var].sel(dayofyear = time.dayofyear).values
-                climatology_std_data[t, :, :] = self.climatology_std[var].sel(dayofyear = time.dayofyear).values  # Ajoutez cette ligne
+                climatology_std_data[t, :, :] = self.climatology_std[var].sel(dayofyear = time.dayofyear).values  
             
             data_vars_climatology[var] = xr.DataArray(
                 climatology_data,
                 coords=coords,
                 dims=['time', 'latitude', 'longitude']
             )
-            data_vars_climatology_std[var] = xr.DataArray(  # Ajoutez ce bloc
+            data_vars_climatology_std[var] = xr.DataArray( 
                 climatology_std_data,
                 coords=coords,
                 dims=['time', 'latitude', 'longitude']
             )
 
-            # Créer les Datasets pour cet échantillon
             ds_predictions = xr.Dataset(data_vars_predictions, coords=coords)
             ds_ground_truth = xr.Dataset(data_vars_ground_truth, coords=coords)
             ds_climatology = xr.Dataset(data_vars_climatology, coords=coords)
-            ds_clim_test = xr.Dataset(data_vars_clim_test, coords=coords)  # Nouveau Dataset pour clim_test
+            ds_clim_test = xr.Dataset(data_vars_clim_test, coords=coords)  
             ds_climatology_std = xr.Dataset(data_vars_climatology_std, coords=coords)
 
-            print("ds_predictions", ds_predictions)
-            print("ds_ground_truth", ds_ground_truth)
-            print("ds_climatology", ds_climatology)
-            print("ds_clim_test", ds_clim_test)
-
-
-            # Appliquer l'inverse scaling séparément
+            # Apply inverse scaling transform to the data
             ds_predictions = self.target_class.inverse_transform(ds_predictions)
             ds_ground_truth = self.target_class.inverse_transform(ds_ground_truth)
-            ds_clim_test =  self.target_class.inverse_transform(ds_clim_test)  # Appliquer l'inverse scaling à clim_test
-            print("ds_predictions", ds_predictions)
-            print("ds_ground_truth", ds_ground_truth)
-            print("ds_climatology", ds_climatology)
-            print("ds_clim_test", ds_clim_test)
-            print("stats", self.target_class.statistics)
+            ds_clim_test =  self.target_class.inverse_transform(ds_clim_test)  
 
             self.all_datasets_predictions.append(ds_predictions)
             self.all_datasets_ground_truth.append(ds_ground_truth)
             self.all_datasets_climatology.append(ds_climatology)
-            self.all_datasets_clim_test.append(ds_clim_test)  # Ajouter clim_test à la liste
+            self.all_datasets_clim_test.append(ds_clim_test)  
             self.all_datasets_climatology_std.append(ds_climatology_std) 
 
     def generate_plots(self):
+        """Generates and saves various plots for examples of model predictions, ground truth, and climatology"""
         n_samples = len(self.all_datasets_predictions)
         random_samples = random.sample(range(n_samples), min(5, n_samples))
 
@@ -279,6 +299,8 @@ class Evaluation:
                 plt.close()
 
     def calculate_mse(self):
+        """Calculates various error metrics (MSE, RMSE, R2, skill scores) for model predictions and climatology"""
+        # TODO could be optimized by using xarray operations
         self.mse_model = {}
         self.mse_climatology = {}
         self.relative_mse_model = {}
@@ -335,12 +357,6 @@ class Evaluation:
             self.r2_climatology[var] = []
             
             for lead_time in range(len(self.all_datasets_ground_truth[0].time)):
-                print('lead time debugging')
-                print(lead_time)
-
-                print("truth", [ds[var].isel(time=lead_time).values.flatten() for ds in self.all_datasets_ground_truth])
-                print("pred", [ds[var].isel(time=lead_time).values.flatten() for ds in self.all_datasets_predictions])
-                print("clim", [ds[var].isel(time=lead_time).values.flatten() for ds in self.all_datasets_climatology])
                 truth = np.concatenate([ds[var].isel(time=lead_time).values.flatten() for ds in self.all_datasets_ground_truth])
                 pred = np.concatenate([ds[var].isel(time=lead_time).values.flatten() for ds in self.all_datasets_predictions])
                 clim = np.concatenate([ds[var].isel(time=lead_time).values.flatten() for ds in self.all_datasets_climatology])
@@ -358,16 +374,6 @@ class Evaluation:
                 range_squared = (np.max(truth) - np.min(truth))**2
                 relative_rmse = np.sqrt(mse_model / range_squared)
                 rmse = np.sqrt(mse_model)
-
-                print(f"Variable: {var}, Lead Time: {lead_time}")
-                print(f"  MSE: {mse_model}")
-                print(f"  Climatology MSE: {mse_clim}")
-                print(f"  RMSE: {rmse}")
-                print(f"  Range Squared: {range_squared}")
-                print(f"  Relative RMSE: {relative_rmse}")
-                print(f"  Truth - Mean: {np.mean(truth)}, Std: {np.std(truth)}, Min: {np.min(truth)}, Max: {np.max(truth)}")
-                print(f"  Pred  - Mean: {np.mean(pred)}, Std: {np.std(pred)}, Min: {np.min(pred)}, Max: {np.max(pred)}")
-                print()
                             
                 
                 self.std_model[var].append(std_rmse)
@@ -384,10 +390,10 @@ class Evaluation:
 
 
     def plot_mse_curves(self):
+        """Generates and saves plots for MSE, RMSE, R2, and skill scores vs lead time for model and climatology"""
         for var in self.test_dataset.target_variables:
             lead_times = [i*self.test_dataset.resolution_output for i in range(len(self.all_datasets_ground_truth[0].time))]
             lead_time_gap = self.test_dataset.aggregator.lead_time_gap
-            print(lead_time_gap)
             x_labels = [f"{t + lead_time_gap}-{t+self.test_dataset.resolution_output+ lead_time_gap}" for t in lead_times]
 
             # Plot MSE
@@ -420,8 +426,6 @@ class Evaluation:
             plt.close()
 
             # Plot R2
-            print("r2_model", self.r2_model)
-            print("r2_climatology", self.r2_climatology)
             plt.figure(figsize=(12, 7))
             plt.plot(lead_times, self.r2_model[var], 'o-', label='Model', markersize=6)
             plt.plot(lead_times, self.r2_climatology[var], 's-', label='Climatology', markersize=6)
@@ -452,11 +456,12 @@ class Evaluation:
 
 
     def calculate_spatial_mse(self):
+        """Calculates spatial MSE and RMSE for model predictions and climatology"""
         self.spatial_mse_model = {}
         self.spatial_rmse_model = {}
         self.spatial_mse_climatology = {}
         self.spatial_rmse_climatology = {}
-        self.spatial_acc = {}  # Ajout pour le spatial ACC
+        self.spatial_acc = {}  
         
         for var in self.test_dataset.target_variables:
             mse_model = np.zeros_like(self.all_datasets_ground_truth[0][var].isel(time=0).values)
@@ -464,7 +469,7 @@ class Evaluation:
             truth_min = np.inf
             truth_max = -np.inf
             
-            # Pour le calcul du spatial ACC
+            # compute the spatial ACCA
             pred_anomalies = []
             truth_anomalies = []
             
@@ -478,7 +483,7 @@ class Evaluation:
                 truth_min = min(truth_min, np.min(truth))
                 truth_max = max(truth_max, np.max(truth))
                 
-                # Calcul des anomalies pour l'ACC
+                # ACC
                 pred_anomaly = (pred - clim).mean(axis=0)
                 truth_anomaly = (truth - clim).mean(axis=0)
                 pred_anomalies.append(pred_anomaly)
@@ -492,7 +497,7 @@ class Evaluation:
             self.spatial_rmse_model[var] = np.sqrt(mse_model) 
             self.spatial_rmse_climatology[var] = np.sqrt(mse_climatology)
             
-            # Calcul du spatial ACC
+            # ACC
             pred_anomalies = np.array(pred_anomalies)
             truth_anomalies = np.array(truth_anomalies)
             
@@ -502,6 +507,7 @@ class Evaluation:
             self.spatial_acc[var] = numerator / denominator
 
     def plot_spatial_mse(self):
+        """Generates and saves plots for spatial MSE and RMSE for model predictions and climatology"""
         for var in self.test_dataset.target_variables:
             lats = [30] + list(self.all_datasets_ground_truth[0].latitude.values) + [45]
             lons = [-10] + list(self.all_datasets_ground_truth[0].longitude.values) + [40]
@@ -522,7 +528,6 @@ class Evaluation:
             rmse_diff = self.spatial_rmse_model[var] - self.spatial_rmse_climatology[var]
             vmin_diff, vmax_diff = symmetric_limits(rmse_diff)
 
-            # Fonction pour créer un plot
             def create_plot(data, title, filename, vmin, vmax, label=None, cmap : str = 'RdBu_r'):
                 fig, ax = plt.subplots(figsize=(12, 8), subplot_kw={'projection': ccrs.PlateCarree()})
                 im = ax.imshow(data, cmap=cmap, transform=ccrs.PlateCarree(),
@@ -558,6 +563,7 @@ class Evaluation:
             create_plot(self.spatial_acc[var], f'Spatial ACC - {var}', f'{var}_spatial_acc.png', -1, 1, 'Spatial ACC', 'RdBu_r')
                 
     def save_mse_to_csv(self):
+        """Saves the MSE results to a CSV file in the save folder"""
         df = pd.DataFrame()
         for var in self.test_dataset.target_variables:
             df[f'{var}_model'] = self.mse_model[var]
@@ -577,14 +583,32 @@ class Evaluation:
             
 
     def save_results(self):
-       # Créer des listes pour stocker les datasets
+        """
+        Saves all evaluation results to disk and generates analysis plots.
+        
+        This method performs several key operations:
+        1. Combines all datasets across samples, adding a sample dimension
+        2. Saves combined datasets to NetCDF files
+        3. Calculates error metrics (MSE)
+        4. Generates visualization plots
+        
+        The following files are saved:
+        - all_predictions.nc: Model predictions
+        - all_ground_truths.nc: Ground truth values
+        - all_climatology.nc: Climatology means
+        - all_climatology_std.nc: Climatology standard deviations
+        - target.nc: Target data
+        - MSE results and various plots
+        """
+        # Create lists to store the datasets
         all_preds = []
         all_truths = []
         all_clims = []
         all_clim_stds = []
-        # Parcourir tous les échantillons
+        
+        # Loop through all samples
         for i, (pred, truth, clim, clim_std) in enumerate(zip(self.all_datasets_predictions, self.all_datasets_ground_truth, self.all_datasets_climatology, self.all_datasets_climatology_std)):
-            # Ajouter une dimension 'sample' à chaque dataset
+            # Add a 'sample' dimension to each dataset
             pred = pred.expand_dims(sample=[i])
             truth = truth.expand_dims(sample=[i])
             clim = clim.expand_dims(sample=[i])
@@ -595,35 +619,28 @@ class Evaluation:
             all_clims.append(clim)
             all_clim_stds.append(clim_std)
 
-        # Combiner tous les datasets de vérité terrain
+        # Combine all ground truth datasets
         combined_truths = xr.concat(all_truths, dim='sample')
         combined_preds = xr.concat(all_preds, dim='sample')
         combined_clims = xr.concat(all_clims, dim='sample')
         combined_clim_stds = xr.concat(all_clim_stds, dim='sample')
 
-        # Sauvegarder les datasets combinés
+        # Save the combined datasets
         combined_preds.to_netcdf(os.path.join(self.save_folder, 'all_predictions.nc'))
         combined_truths.to_netcdf(os.path.join(self.save_folder, 'all_ground_truths.nc'))
         combined_clims.to_netcdf(os.path.join(self.save_folder, 'all_climatology.nc'))
-        combined_clim_stds.to_netcdf(os.path.join(self.save_folder, 'all_climatology_std.nc'))  # Ajoutez cette ligne
+        combined_clim_stds.to_netcdf(os.path.join(self.save_folder, 'all_climatology_std.nc'))
         
         self.target_class.data.to_netcdf(os.path.join(self.save_folder, 'target.nc'))
 
-        # Calculer et sauvegarder les MSE
+        # Calculate and save MSE metrics
         self.calculate_mse()
         self.save_mse_to_csv()
 
-        # Générer les graphiques
+        # Generate analysis plots
         self.plot_mse_curves()
         self.calculate_spatial_mse()
         self.plot_spatial_mse()
-
-    def run_evaluation(self):
-        self.load_model()
-        self.run_inference()
-        self.create_data_arrays()
-        self.generate_plots()
-        self.save_results()
 
 
 # Usage

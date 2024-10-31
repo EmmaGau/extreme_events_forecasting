@@ -29,7 +29,7 @@ from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from data.dataset import DatasetEra
 from torch.utils.data import DataLoader
 from utils.statistics import DataScaler
-from utils.temporal_aggregator import TemporalAggregatorFactory
+from data.temporal_aggregator import TemporalAggregatorFactory
 import time
 from torchmetrics import R2Score
 from torch.distributions import Normal

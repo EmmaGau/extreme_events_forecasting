@@ -11,16 +11,13 @@ from typing import List
 from utils.tools import AreaDataset
 from typing import List
 
-
-
-MAPPING_SEASON= {"DJF": 0, "MAM": 1, "JJA": 2, "SON": 3}
-
-
 import xarray as xr
 import pandas as pd
 import numpy as np
 
 MAPPING_SEASON = {"DJF": 0, "MAM": 1, "JJA": 2, "SON": 3}
+
+#TODO: Refactor this class to adapt to new version of TemporalAggregator and DatasetEra
 
 class HierarchicalAggregator:
     def __init__(self, datasets: list[xr.Dataset], target: xr.Dataset, in_len: list[int], out_len: int, resolution_input: list[int], resolution_output: int, gap: int = 1):

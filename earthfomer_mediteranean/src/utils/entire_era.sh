@@ -1,15 +1,15 @@
 #!/bin/bash
-#SBATCH --job-name=earthformer_training
+#SBATCH --job-name=save_era_entire
 #SBATCH --partition=gpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --gpus=1
 #SBATCH --gpus-per-node=1
-#SBATCH --time=8:00:00
+#SBATCH --time=24:00:00
 #SBATCH --mem-per-cpu=9000
 
-#SBATCH --output=/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/outputs/output-%j.out
-#SBATCH --error=/home/egauillard/extreme_events_forecasting/earthfomer_mediteranean/src/outputs/error-%j.err
+#SBATCH --output=earthfomer_mediteranean/src/outputs/output-%j.out
+#SBATCH --error=earthfomer_mediteranean/src/outputs/error-%j.err
 
 #!/bin/bash
 
@@ -39,4 +39,4 @@ echo "Python executable: $(which python)"
 
 # Exécutez le script
 python -c "import sys; print(sys.path)"
-python model/earthformer_model.py --gpus 1
+python utils/entire_era.py 
