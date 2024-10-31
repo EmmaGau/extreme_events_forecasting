@@ -1,4 +1,8 @@
-"""A space-time Transformer with Cuboid Attention"""
+""" This file adapt Earthformer to our task:
+    - Enables to have an different input and output spatial size
+    - Adds some temporal embeddings 
+    - Add the option of predicting distribution parameters instead of forecasting a deterministic value"""
+
 from typing import Sequence, Union
 import warnings
 from functools import lru_cache
@@ -2516,7 +2520,6 @@ class InitialEncoder(nn.Module):
         return x
 
 class FinalDecoder(nn.Module):
-
     def __init__(self,
                  target_thw,
                  dim,

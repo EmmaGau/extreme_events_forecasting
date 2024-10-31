@@ -1,39 +1,46 @@
-import warnings
-from typing import Sequence
-from shutil import copyfile
 import inspect
+import os
+import time
+import warnings
+from copy import deepcopy
+from shutil import copyfile
+from typing import Sequence
+
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import nn
-from torch.nn import functional as F
+from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR
-import torchmetrics
+
 import pytorch_lightning as pl
-from pytorch_lightning import Trainer, seed_everything, loggers as pl_loggers
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, DeviceStatsMonitor, Callback
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from omegaconf import OmegaConf
-import os
-import argparse
+import torchmetrics
+from torchmetrics import R2Score
+from pytorch_lightning import Trainer, seed_everything
+from pytorch_lightning import loggers as pl_loggers
+from pytorch_lightning.callbacks import (
+    Callback,
+    ModelCheckpoint,
+    LearningRateMonitor,
+    DeviceStatsMonitor,
+    EarlyStopping
+)
+import matplotlib.pyplot as plt
 from einops import rearrange
+from omegaconf import OmegaConf
+import wandb
+from pytorch_lightning.loggers import WandbLogger
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image
+
+
 from earthformer.config import cfg
 from earthformer.utils.optim import SequentialLR, warmup_lambda
 from earthformer.utils.utils import get_parameter_names
-from nets.cuboid_transformer import CuboidTransformerModel
 from earthformer.datasets.enso.enso_dataloader import ENSOLightningDataModule, NINO_WINDOW_T
-from copy import deepcopy
-import wandb
-from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from nets.cuboid_transformer import CuboidTransformerModel
 from data.dataset import DatasetEra
-from torch.utils.data import DataLoader
 from data.temporal_aggregator import TemporalAggregatorFactory
-import time
-from torchmetrics import R2Score
-from pytorch_grad_cam import GradCAM
-from pytorch_grad_cam.utils.image import show_cam_on_image
-import matplotlib.pyplot as plt
 
 _curr_dir = os.path.realpath(os.path.dirname(os.path.realpath(__file__)))
 exps_dir = os.path.join(_curr_dir, "experiments")
@@ -58,6 +65,15 @@ class CuboidERAModule(pl.LightningModule):
                  save_dir: str = None,
                  input_shape: Sequence[int] = None,
                  output_shape: Sequence[int]= None,):
+        """ Pytorch Lightning Module for the Cuboid Transformer model.
+
+            Args:
+                total_num_steps (int): Total number of training steps
+                config_file_path (str, optional): Path to configuration YAML file. Defaults to "config.yaml"
+                save_dir (str, optional): Directory to save model outputs. Defaults to None
+                input_shape (Sequence[int], optional): Shape of input tensor (time, lat, lon, channels). Defaults to None
+                output_shape (Sequence[int], optional): Shape of output tensor (time, lat, lon, channels). Defaults to None
+        """
         super(CuboidERAModule, self).__init__()
         oc = OmegaConf.load(open(config_file_path))
         model_cfg = OmegaConf.to_object(oc.model)
@@ -136,10 +152,7 @@ class CuboidERAModule(pl.LightningModule):
         self.dataset_config = oc.data
         self.layout = oc.layout.layout
         self.channel_axis = self.layout.find("C")
-        print("channel axis", self.channel_axis)
         self.batch_axis = self.layout.find("N")
-        print("input_shape",input_shape)
-        print("output_shape", output_shape)
         self.channels = self.input_shape[self.channel_axis-1]
         self.max_epochs = oc.optim.max_epochs
         self.optim_method = oc.optim.method
@@ -161,6 +174,7 @@ class CuboidERAModule(pl.LightningModule):
         self.test_mse = torchmetrics.MeanSquaredError()
         self.test_mae = torchmetrics.MeanAbsoluteError()
 
+        # Add R2Score and MAE for each variable for the logging
         for i in range(self.output_shape[self.channel_axis-1]):
             setattr(self, f'valid_r2_var_{i}', R2Score())
 
@@ -170,6 +184,8 @@ class CuboidERAModule(pl.LightningModule):
         self.configure_save(cfg_file_path=config_file_path)
 
     def configure_save(self, cfg_file_path=None):
+        """Configure the save directory for the model outputs.
+        """
         self.save_dir = os.path.join(exps_dir, self.save_dir)
         os.makedirs(self.save_dir, exist_ok=True)
         self.scores_dir = os.path.join(self.save_dir, 'scores')
@@ -315,6 +331,18 @@ class CuboidERAModule(pl.LightningModule):
     @staticmethod
     def get_dataloaders(dataset_cfg: dict, total_batch_size: int, micro_batch_size: int, 
                         VAL_YEARS, TEST_YEARS):
+        """Create dataloaders for training, validation, and testing.
+            Args:
+                dataset_cfg (dict): Configuration dictionary containing dataset parameters 
+                total_batch_size (int): Total size of batches across all GPUs and gradient
+                    accumulation steps. Used for distributed training configurations.
+                micro_batch_size (int): Actual batch size used per GPU per forward pass.
+                    Should be <= total_batch_size.
+                VAL_YEARS (List[int]): List of years to use for validation dataset, 
+                    e.g., [2006, 2015] uses years from 2006 to 2015.
+                TEST_YEARS (List[int]): List of years to use for test dataset,
+                    e.g., [2016, 2024] uses years from 2016 to 2024.
+        """
         
         train_config = deepcopy(dataset_cfg)
         val_config = deepcopy(dataset_cfg)
@@ -353,32 +381,44 @@ class CuboidERAModule(pl.LightningModule):
         loss = F.mse_loss(pred_seq, target)
         return pred_seq, loss, input, target, clim_tensor
 
-    
-    def visualize_saliency_maps(self,input_data, saliency_maps, num_channels):
+        
+    def visualize_saliency_maps(self, input_data, saliency_maps, num_channels):
+        """Visualizes saliency maps for each input channel.
+
+        Creates three visualizations for each channel:
+        1. Input data visualization
+        2. Saliency map visualization
+        3. Overlay of saliency map on input data
+
+        Args:
+            input_data (torch.Tensor): Input tensor of shape (B, T, H, W, C)
+            saliency_maps (torch.Tensor): Saliency maps tensor of same shape as input
+            num_channels (int): Number of channels to visualize
+        """
         B, T, H, W, C = input_data.shape
-        # detach and to numpy 
+        # Detach tensors and move to CPU 
         input_data = input_data.detach().cpu()
         saliency_maps = saliency_maps.detach().cpu()
         
         for c in range(input_data.shape[self.channel_axis-1]-1):
-            # Somme sur le temps pour l'entrée et la carte de saillance, sur tous les échantillons du batch
-            input_spatial = input_data[:, :, :, :, c].sum(dim=(0, 1))  # Somme sur le batch (B) et le temps (T)
-            saliency_spatial = saliency_maps[:, :, :, :, c].sum(dim=(0, 1))  # Même chose pour la carte de saillance
+            # Sum over time dimension for input and saliency map, across all batch samples
+            input_spatial = input_data[:, :, :, :, c].sum(dim=(0, 1))  # Sum over batch (B) and time (T)
+            saliency_spatial = saliency_maps[:, :, :, :, c].sum(dim=(0, 1))  # Same for saliency map
             
-            # Création de la figure
+            # Create figure with three subplots
             fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
             
-            # Affichage de l'entrée
+            # Display input data
             im1 = ax1.imshow(input_spatial, cmap='viridis')
             ax1.set_title(f'Input - Channel {c}')
             fig.colorbar(im1, ax=ax1)
             
-            # Affichage de la carte de saillance
+            # Display saliency map
             im2 = ax2.imshow(saliency_spatial, cmap='hot')
             ax2.set_title(f'Saliency Map - Channel {c}')
             fig.colorbar(im2, ax=ax2)
             
-            # Superposition de la carte de saillance sur l'entrée
+            # Overlay saliency map on input
             im3 = ax3.imshow(input_spatial, cmap='viridis')
             im3 = ax3.imshow(saliency_spatial, cmap='hot', alpha=0.5)
             ax3.set_title(f'Overlay - Channel {c}')
@@ -388,8 +428,18 @@ class CuboidERAModule(pl.LightningModule):
             plt.savefig(f'saliency_map_channel_{c}.png')
             plt.close()
 
-    
     def compute_saliency_map(self, batch):
+        """Computes saliency maps for the input batch using gradients.
+
+        Calculates the gradient of the loss with respect to the input features
+        to determine which input features are most important for the model's predictions.
+
+        Args:
+            batch (tuple): Input batch containing (input, target, metadata...)
+
+        Returns:
+            torch.Tensor: Saliency maps showing importance of each input feature
+        """
         self.eval()
         pred_seq, loss, input, target, clim_tensor = self.forward(batch)
         
@@ -401,20 +451,19 @@ class CuboidERAModule(pl.LightningModule):
         
         self.visualize_saliency_maps(input, saliency, input.shape[self.channel_axis-1])
 
-        # faire saliency vairable 
+        # Compute per-variable saliency 
         saliency_variable = saliency[0].sum(dim=(0, 1, 2))
         print("saliency_variable", saliency_variable)
 
-        # faire saliency temporelle
-        saliency_temporal = saliency[0].sum(dim=(1, 2,3))
+        # Compute temporal saliency
+        saliency_temporal = saliency[0].sum(dim=(1, 2, 3))
         print("saliency_temporal", saliency_temporal)
-
-
         
         # Optionally, take the maximum across the channel dimension if input has multiple channels
         saliency, _ = torch.max(saliency, dim=1)  # This reduces the saliency map to (N, lat, lon)
         
         return saliency
+
 
     def training_step(self, batch, batch_idx):
         pred_seq, loss, input, target, clim_tensor = self(batch)
@@ -423,7 +472,7 @@ class CuboidERAModule(pl.LightningModule):
         for i, mse in enumerate(mse_per_var):
             self.log(f'train_loss_var_{i}', mse, on_step=False, on_epoch=True)
 
-        # Calcul du skill score par rapport à la climatologie
+        # Compute skill score compared to climatology
         mse_climatology = F.mse_loss(clim_tensor, target)
         skill_score = 1 - (loss / mse_climatology)
         self.log('train_skill_score', skill_score, on_step=False, on_epoch=True)
@@ -463,7 +512,7 @@ class CuboidERAModule(pl.LightningModule):
             for i in range(self.output_shape[self.channel_axis-1]):
                 getattr(self, f'valid_r2_var_{i}')(pred_seq[..., i].view(-1, 1), target_seq[..., i].view(-1, 1))
 
-            # Calcul du skill score par rapport à la climatologie
+            # Compute skill score compared to climatology
             mse_model = F.mse_loss(pred_seq, target_seq)
             mse_climatology = F.mse_loss(clim_tensor, target_seq)
             skill_score = 1 - (mse_model / mse_climatology)
@@ -520,7 +569,7 @@ class CuboidERAModule(pl.LightningModule):
             self.test_mse(pred_seq, target_seq)
             self.test_mae(pred_seq, target_seq)
 
-            # Calcul du skill score par rapport à la climatologie
+            # Compute skill score compared to climatology
             mse_model = F.mse_loss(pred_seq, target_seq)
             mse_climatology = F.mse_loss(clim_tensor, target_seq)
             skill_score = 1 - (mse_model / mse_climatology)

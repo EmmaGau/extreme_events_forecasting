@@ -40,8 +40,10 @@ exps_dir = os.path.join(_curr_dir, "experiments")
 pretrained_checkpoints_dir = cfg.pretrained_checkpoints_dir
 pytorch_state_dict_name = "earthformer_icarenso2021.pt"
 
-VAL_YEARS = [1991, 2009]
-TEST_YEARS = [2010, 2024]
+VAL_YEARS = [2005,2015]
+TEST_YEARS = [2016,2024]
+
+# TODO: Adapt to new earthformer_model class because some parameters have changed 
 class CuboidERAModule(pl.LightningModule):
 
     def __init__(self,
@@ -152,7 +154,7 @@ class CuboidERAModule(pl.LightningModule):
         self.valid_nll = torchmetrics.MeanMetric()
 
         self.valid_crps_var = {} 
-
+        # here we validate on crps as we look at continuous distribution
         for i in range(self.output_shape[self.channel_axis-1]):
             setattr(self, f'valid_crps_var_{i}',torchmetrics.MeanMetric())
 
@@ -325,7 +327,7 @@ class CuboidERAModule(pl.LightningModule):
         return (sigma * (normalized_diff * (2 * std_normal.cdf(normalized_diff) - 1) + 
                 2 * std_normal.log_prob(normalized_diff).exp() - 1 / torch.sqrt(torch.tensor(torch.pi)))).mean()
 
-
+    # mainly the output parameters change and the loss function compared to earthformer_model
     def forward(self, batch):
         input, target, season_float, year_float, *_ = batch
         input = input.float()  # (B, T, H, W, C)
@@ -381,7 +383,7 @@ class CuboidERAModule(pl.LightningModule):
             self.valid_crps(self.crps_loss(mu, sigma, target_seq).mean())
             self.valid_nll(self.gaussian_nll_loss(mu, sigma, target_seq).mean())
             
-            # Calculate skill score using CRPS
+            # Compute skill score
             crps_model = self.crps_loss(mu, sigma, target_seq).mean()
             crps_climatology = self.crps_loss(target_seq.mean(), target_seq.std(), target_seq).mean()
             skill_score = 1 - (crps_model / crps_climatology)
